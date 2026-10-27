@@ -1,0 +1,1605 @@
+{% extends "base.html" %}
+{% block title %}{{ session.title }} — AI 영상 피드백 시스템{% endblock %}
+
+{% block page_title %}
+  {{ session.title }}
+  <span class="badge bg-secondary ms-2" style="font-size:11px;font-weight:500">{{ session.genre }}</span>
+{% endblock %}
+
+{% block topbar_actions %}
+  <a href="{{ url_for('session.systemic_issues', session_id=session.id) }}"
+     class="btn btn-sm btn-ghost" title="반복 이슈">
+    <i class="bi bi-diagram-3 me-1"></i><span class="d-none d-md-inline">반복이슈</span>
+  </a>
+  <a href="{{ url_for('session.character_profiles', session_id=session.id) }}"
+     class="btn btn-sm btn-ghost" title="캐릭터 프로파일">
+    <i class="bi bi-person-circle me-1"></i><span class="d-none d-md-inline">캐릭터</span>
+  </a>
+  <a href="{{ url_for('session.version_history', session_id=session.id) }}"
+     class="btn btn-sm btn-ghost" title="프롬프트 버전 이력">
+    <i class="bi bi-clock-history me-1"></i><span class="d-none d-md-inline">버전 이력</span>
+  </a>
+  <a href="{{ url_for('session.report', session_id=session.id) }}"
+     class="btn btn-sm btn-accent">
+    <i class="bi bi-bar-chart-line me-1"></i><span class="d-none d-md-inline">리포트</span>
+  </a>
+  <button type="button" class="btn btn-sm btn-ghost btn-danger-ghost"
+          onclick="confirmDeleteSession()" title="프로젝트 영구 삭제">
+    <i class="bi bi-trash"></i>
+  </button>
+{% endblock %}
+
+{% block content %}
+<div class="container-xl">
+  <form id="deleteSessionForm" method="POST"
+        action="{{ url_for('session.delete_session', session_id=session.id) }}"
+        style="display:none"></form>
+
+  {% if current_round %}
+
+  <!-- 피드백 반영 후 영상 생성 안내 배너 -->
+  {% if request.args.get('prompt_ready') and current_round.status == 'prompt_built' and current_round.round_number > 1 %}
+  <div class="alert alert-success border-success shadow-sm mb-4 d-flex align-items-start gap-3" id="promptReadyBanner" role="alert">
+    <div style="font-size:2rem;line-height:1">✅</div>
+    <div class="flex-grow-1">
+      <div class="fw-bold fs-6 mb-1">피드백이 반영된 새 프롬프트가 준비됐습니다 — 라운드 {{ current_round.round_number }}</div>
+      <div class="small text-muted mb-2">아래 프롬프트를 확인하고 영상 생성 버튼을 눌러 다음 라운드를 시작하세요.</div>
+      <a href="#promptCard" class="btn btn-success btn-sm">
+        <i class="bi bi-camera-video me-1"></i>바로 영상 생성하러 가기
+      </a>
+    </div>
+    <button type="button" class="btn-close" onclick="this.closest('.alert').remove()"></button>
+  </div>
+  {% endif %}
+
+  <!-- 파이프라인 진행 상태 -->
+  <div class="card mb-4 shadow-sm">
+    <div class="card-header card-header-active fw-semibold d-flex justify-content-between align-items-center" data-round-status="{{ current_round.status }}">
+      <span><i class="bi bi-activity me-2 text-primary"></i>라운드 {{ current_round.round_number }} — 파이프라인</span>
+      <span class="badge bg-primary">{{ current_round.status | replace('_',' ') }}</span>
+    </div>
+    <div class="card-body pb-2">
+      {% set statuses = ['prompt_built', 'generating', 'video_ready', 'uploaded', 'feedback_collected', 'feedback_classified', 'feedback_clustered', 'pending_review', 'prompt_updated'] %}
+      {% set labels = ['프롬프트', '생성 중', '영상 완성', '업로드', '피드백 수집', '분류', '클러스터링', '검토 대기', '반영 완료'] %}
+      {% set current_idx = statuses.index(current_round.status) if current_round.status in statuses else 0 %}
+      <!-- 데스크톱: 전체 스텝 -->
+      <div class="d-none d-sm-flex align-items-center overflow-auto pb-1 gap-0">
+        {% for status, label in zip(statuses, labels) %}
+          {% set i = loop.index0 %}
+          {% set is_done = i <= current_idx %}
+          {% set is_current = i == current_idx %}
+          <div class="text-center px-1" style="min-width:72px">
+            <div class="step-circle mx-auto mb-1 {{ 'step-circle-current' if is_current else ('step-circle-done' if is_done else 'step-circle-pending') }}"
+                 style="width:40px;height:40px;font-size:0.8rem">
+              {% if is_done %}
+                {% if is_current and status == 'generating' %}
+                  <span class="spinner-border" style="width:18px;height:18px;border-width:2px"></span>
+                {% else %}
+                  <i class="bi bi-check-lg"></i>
+                {% endif %}
+              {% else %}
+                {{ i+1 }}
+              {% endif %}
+            </div>
+            <div class="step-label-full" style="font-size:0.65rem;{{ 'font-weight:700;color:var(--bs-primary)' if is_current else ('color:var(--bs-secondary)' if is_done else 'opacity:0.4') }}">{{ label }}</div>
+          </div>
+          {% if not loop.last %}
+          <div class="{{ 'text-primary' if i < current_idx else 'text-muted opacity-25' }}" style="font-size:0.75rem;flex-shrink:0">
+            <i class="bi bi-chevron-right"></i>
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <!-- 모바일: 현재 스텝 + 진행바 -->
+      <div class="d-sm-none">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <div class="step-circle step-circle-current" style="width:36px;height:36px;flex-shrink:0">
+            {% if current_round.status == 'generating' %}
+              <span class="spinner-border" style="width:16px;height:16px;border-width:2px"></span>
+            {% else %}
+              {{ current_idx + 1 }}
+            {% endif %}
+          </div>
+          <div>
+            <div class="fw-semibold small">{{ labels[current_idx] if current_idx < labels|length else current_round.status }}</div>
+            <div class="text-muted" style="font-size:0.7rem">{{ current_idx + 1 }} / {{ statuses|length }} 단계</div>
+          </div>
+        </div>
+        <div class="pipeline-progress">
+          <div class="pipeline-progress-bar" style="width:{{ ((current_idx + 1) / statuses|length * 100)|round }}%"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-4">
+    <!-- 좌측: 현재 라운드 액션 -->
+    <div class="col-lg-7">
+
+      <!-- 프롬프트 카드 -->
+      <div class="card mb-3 shadow-sm {% if request.args.get('prompt_ready') and current_round.status == 'prompt_built' and current_round.round_number > 1 %}border-success border-2{% endif %}" id="promptCard">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span class="fw-semibold"><i class="bi bi-magic me-2 text-info"></i>영상 생성 프롬프트</span>
+          <span class="badge bg-light text-dark border">라운드 {{ current_round.round_number }}</span>
+        </div>
+        <div class="card-body">
+          <!-- 프롬프트 표시 + 인라인 편집 -->
+          <div id="promptDisplay">
+            <pre class="p-3 rounded small mb-2" style="overflow-x:auto;white-space:pre-wrap;word-break:break-word">{{ current_round.video_gen_prompt or '(프롬프트 없음)' }}</pre>
+            {% if current_round.status == 'prompt_built' %}
+            <button class="btn btn-sm btn-outline-secondary mb-2 w-100" onclick="togglePromptEdit()">
+              <i class="bi bi-pencil me-1"></i>프롬프트 직접 수정
+            </button>
+            {% endif %}
+          </div>
+          <div id="promptEditArea" style="display:none">
+            <form method="POST" action="{{ url_for('session.edit_prompt', session_id=session.id) }}">
+              <textarea class="form-control font-monospace small mb-2" name="new_prompt" rows="6"
+                        style="background:var(--code-bg);color:var(--code-color)">{{ current_round.video_gen_prompt or '' }}</textarea>
+              <div class="d-flex gap-2 mb-2">
+                <button type="submit" class="btn btn-sm btn-warning flex-grow-1">
+                  <i class="bi bi-check-lg me-1"></i>저장
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="togglePromptEdit()">취소</button>
+              </div>
+            </form>
+          </div>
+
+          {% if current_round.status == 'prompt_built' %}
+          <!-- 피드백 예측 버튼 -->
+          <button type="button" class="btn btn-sm btn-outline-info mb-3 w-100"
+                  onclick="loadFeedbackPrediction()" data-bs-toggle="modal" data-bs-target="#predictModal">
+            <i class="bi bi-lightbulb me-1"></i>영상 생성 전 피드백 예측 (AI 분석)
+          </button>
+
+          <!-- ── 영상 생성 방식 탭 ─────────────────────────────── -->
+          <div class="generation-mode-tabs mb-3" id="genModeTabs">
+            <button class="gen-tab active" id="tabSingle" onclick="switchGenTab('single')">
+              <i class="bi bi-camera-video me-1"></i>단일 생성
+            </button>
+            <button class="gen-tab" id="tabMultishot" onclick="switchGenTab('multishot')">
+              <i class="bi bi-collection-play me-1"></i>멀티샷 시퀀스
+            </button>
+          </div>
+
+          <!-- 단일 생성 패널 -->
+          <div id="panelSingle">
+            <form method="POST" action="{{ url_for('session.generate_video', session_id=session.id) }}"
+                  data-loading-btn="true" id="generateVideoForm">
+              <!-- 캐릭터 프로파일 -->
+              <div class="mb-2 p-2 rounded" style="background:var(--card-section-bg)">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                  <div class="small fw-semibold">
+                    <i class="bi bi-person-circle me-1 text-warning"></i>캐릭터 프로파일
+                    <small class="text-muted fw-normal">(선택)</small>
+                  </div>
+                  <a href="{{ url_for('session.character_profiles', session_id=session.id) }}"
+                     class="btn btn-xs btn-outline-warning py-0 px-1" style="font-size:0.72rem">
+                    <i class="bi bi-person-plus"></i> 관리
+                  </a>
+                </div>
+                {% if char_profiles %}
+                <select name="character_profile_id" class="form-select form-select-sm">
+                  <option value="">선택 안 함</option>
+                  {% for p in char_profiles %}
+                  <option value="{{ p.id }}">{{ p.name }} ({{ p.get_image_paths()|length }}장)</option>
+                  {% endfor %}
+                </select>
+                {% else %}
+                <div class="text-muted small">
+                  <a href="{{ url_for('session.character_profiles', session_id=session.id) }}" class="text-warning">
+                    <i class="bi bi-plus-circle me-1"></i>캐릭터 프로파일 등록하기
+                  </a>
+                </div>
+                {% endif %}
+              </div>
+              <!-- 참조 이미지 URL -->
+              <div class="mb-2">
+                <input type="text" name="image_url" class="form-control form-control-sm"
+                       placeholder="참조 이미지 URL (선택 · Kling image-to-video 프레임 체이닝)">
+              </div>
+              <!-- 영상 길이 선택 -->
+              <div class="mb-2 p-2 rounded" style="background:var(--card-section-bg)">
+                <div class="small fw-semibold mb-1">영상 길이</div>
+                <div class="d-flex gap-2 flex-wrap">
+                  <div class="form-check form-check-inline mb-0">
+                    <input class="form-check-input" type="radio" name="extend_seconds" value="8" id="ext8" checked>
+                    <label class="form-check-label small" for="ext8">8초 (테스트)</label>
+                  </div>
+                  <div class="form-check form-check-inline mb-0">
+                    <input class="form-check-input" type="radio" name="extend_seconds" value="22" id="ext22">
+                    <label class="form-check-label small" for="ext22">22초 (일반홍보)</label>
+                  </div>
+                  <div class="form-check form-check-inline mb-0">
+                    <input class="form-check-input" type="radio" name="extend_seconds" value="29" id="ext29">
+                    <label class="form-check-label small" for="ext29">29초 (장홍보)</label>
+                  </div>
+                  <div class="form-check form-check-inline mb-0">
+                    <input class="form-check-input" type="radio" name="extend_seconds" value="36" id="ext36">
+                    <label class="form-check-label small" for="ext36">36초 (싱잉홍보)</label>
+                  </div>
+                  <div class="form-check form-check-inline mb-0">
+                    <input class="form-check-input" type="radio" name="extend_seconds" value="64" id="ext64">
+                    <label class="form-check-label small" for="ext64">64초 (장편)</label>
+                  </div>
+                </div>
+                <small class="text-muted">8초 테스트 확인 후 본생성 권장 · mock 어댑터는 무시됨</small>
+              </div>
+              <!-- BGM 프롬프트 -->
+              <div class="mb-2 p-2 rounded" style="background:var(--card-section-bg)" id="bgmPromptSection">
+                <div class="small fw-semibold mb-1">BGM 스타일 <span class="text-muted fw-normal">(선택)</span></div>
+                <input type="text" name="bgm_prompt" class="form-control form-control-sm"
+                       placeholder="예: calm orchestral background, upbeat corporate jazz — 비워두면 장르 기본값 사용"
+                       value="{{ current_round.music_prompt or '' }}">
+                <small class="text-muted">BGM 없음 선택 시 무시됩니다</small>
+              </div>
+
+              <!-- BGM 처리 방식 -->
+              <div class="mb-2 p-2 rounded" style="background:var(--card-section-bg)">
+                <div class="small fw-semibold mb-1">BGM 처리</div>
+                <div class="d-flex gap-3 flex-wrap">
+                  <div class="form-check form-check-inline mb-0">
+                    <input class="form-check-input" type="radio" name="audio_mode" value="replace" id="audioReplace" checked>
+                    <label class="form-check-label small" for="audioReplace">BGM 추가 <span class="text-muted">(권장)</span></label>
+                  </div>
+                  <div class="form-check form-check-inline mb-0">
+                    <input class="form-check-input" type="radio" name="audio_mode" value="duck" id="audioDuck">
+                    <label class="form-check-label small" for="audioDuck">BGM 믹스 <span class="text-muted">(원본 오디오 있을 때)</span></label>
+                  </div>
+                  <div class="form-check form-check-inline mb-0">
+                    <input class="form-check-input" type="radio" name="audio_mode" value="skip" id="audioSkip">
+                    <label class="form-check-label small" for="audioSkip">BGM 없음</label>
+                  </div>
+                </div>
+                <small class="text-muted">Kling 영상은 무음 생성 → BGM 추가 권장 · ElevenLabs 키 없으면 자동 건너뜀</small>
+              </div>
+
+              {% if current_round.round_number > 1 %}
+              <button type="submit" class="btn btn-accent w-100 fw-bold" style="font-size:1rem">
+                <i class="bi bi-camera-video-fill me-2"></i>라운드 {{ current_round.round_number }} 영상 생성
+                <span class="badge bg-white text-success ms-2" style="font-size:0.7rem">피드백 반영됨</span>
+              </button>
+              {% else %}
+              <button type="submit" class="btn btn-accent w-100">
+                <i class="bi bi-camera-video me-2"></i>영상 생성 시작
+              </button>
+              {% endif %}
+            </form>
+          </div>
+
+          <!-- 멀티샷 시퀀스 패널 -->
+          <div id="panelMultishot" style="display:none">
+            <div class="multishot-panel">
+              <!-- AI Director 바 -->
+              <div class="multishot-director-bar mb-3">
+                <div class="d-flex align-items-center gap-2 flex-grow-1">
+                  <div class="multishot-director-icon"><i class="bi bi-magic"></i></div>
+                  <div>
+                    <div class="fw-semibold small">AI Director</div>
+                    <div class="text-muted" style="font-size:.72rem">프롬프트를 연속 샷으로 자동 분해</div>
+                  </div>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                  <select class="form-select form-select-sm" style="width:80px" id="shotNumSelect">
+                    <option value="3">3 샷</option>
+                    <option value="4" selected>4 샷</option>
+                    <option value="5">5 샷</option>
+                    <option value="6">6 샷</option>
+                  </select>
+                  <button class="btn btn-sm btn-accent px-3" onclick="shotAutoDecompose(event)" id="btnDecompose">
+                    <i class="bi bi-magic me-1"></i>자동 분해
+                  </button>
+                </div>
+              </div>
+
+              <!-- 샷 카드 트랙 -->
+              <div class="shot-sequence-track" id="shotContainer">
+                <div class="shot-empty-state" id="shotEmptyState">
+                  <i class="bi bi-film"></i>
+                  <div class="fw-semibold mt-2 mb-1">샷이 없습니다</div>
+                  <div class="small text-muted">AI Director로 자동 분해하거나 직접 추가하세요</div>
+                </div>
+              </div>
+
+              <!-- 하단 액션 바 -->
+              <div class="multishot-actions">
+                <div class="d-flex align-items-center gap-2">
+                  <div id="shotStats" class="small text-muted"></div>
+                </div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-sm btn-ghost" onclick="shotAddManual()">
+                    <i class="bi bi-plus me-1"></i>샷 추가
+                  </button>
+                  <button class="btn btn-sm btn-outline-accent" onclick="shotGenerateAll()" id="btnGenAll">
+                    <i class="bi bi-play-fill me-1"></i>전체 생성
+                  </button>
+                </div>
+              </div>
+
+              <!-- 시퀀스 확정 버튼 (모든 샷 완료 시 등장) -->
+              <div id="finalizeArea" style="display:none" class="mt-3">
+                <div class="finalize-banner">
+                  <i class="bi bi-check-circle-fill me-2" style="color:var(--c-success)"></i>
+                  <span class="fw-semibold">모든 샷 생성 완료</span>
+                  <span class="text-muted small ms-2">concat 후 파이프라인을 계속합니다</span>
+                  <button class="btn btn-accent ms-auto" id="btnFinalizeSeq" onclick="finalizeShots()">
+                    <i class="bi bi-check2-all me-2"></i>시퀀스 확정 → 파이프라인 계속
+                  </button>
+                </div>
+              </div>
+
+              <!-- 노드 캔버스 (접기 가능) -->
+              <div class="mt-2 text-end">
+                <button class="btn btn-sm btn-ghost" style="font-size:.75rem" onclick="toggleShotCanvas(this)">
+                  <i class="bi bi-diagram-2 me-1"></i>노드 캔버스 보기
+                </button>
+              </div>
+              <div id="shotCanvasWrapper" style="display:none;margin-top:8px">
+                <div id="shot-flow-canvas"
+                     style="height:340px;border:1px solid var(--border);border-radius:10px;"></div>
+              </div>
+            </div>
+          </div>
+          <!-- ── /영상 생성 방식 탭 ───────────────────────────── -->
+          {% endif %}
+
+          {% if current_round.status == 'generating' %}
+          <div class="alert alert-info d-flex align-items-center gap-3 mb-0 mt-2" id="generatingAlert">
+            <span class="spinner-border spinner-border-sm flex-shrink-0" role="status"></span>
+            <div>
+              <strong>영상 생성 중...</strong>
+              <div class="small text-muted mt-1">완료되면 페이지가 자동으로 업데이트됩니다.</div>
+            </div>
+          </div>
+          {% endif %}
+
+          {% if current_round.storyboard %}
+          <div class="mt-2">
+            <button class="btn btn-sm btn-outline-secondary w-100" type="button" data-bs-toggle="collapse" data-bs-target="#storyboard">
+              <i class="bi bi-file-text me-1"></i>스토리보드 보기
+            </button>
+            <div class="collapse mt-2" id="storyboard">
+              <pre class="storyboard-pre p-3 rounded small" style="white-space:pre-wrap">{{ current_round.storyboard }}</pre>
+            </div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- 생성된 영상 미리보기 -->
+      {% if current_round.video_file_path %}
+      {% set _vfp = current_round.video_file_path %}
+      {% set _vext = _vfp.split('.')[-1].lower() if '.' in _vfp else '' %}
+      <div class="card mb-3 shadow-sm border-success">
+        <div class="card-header card-header-done fw-semibold d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-film me-2 text-success"></i>생성된 영상</span>
+          <div class="d-flex gap-2 align-items-center">
+            {% if current_round.generator_adapter == 'kling' %}
+              <span class="badge bg-success">Kling v3</span>
+            {% elif current_round.generator_adapter == 'veo' %}
+              <span class="badge bg-success">Veo 3.1</span>
+            {% elif current_round.generator_adapter == 'runway' %}
+              <span class="badge bg-primary">Runway</span>
+            {% elif current_round.generator_adapter == 'mock' %}
+              <span class="badge" style="background:#fd7e14;color:#fff">mock</span>
+            {% elif current_round.generator_adapter %}
+              <span class="badge bg-secondary">{{ current_round.generator_adapter }}</span>
+            {% endif %}
+            {% if current_round.estimated_cost_usd %}
+              <span class="badge bg-light text-dark border">${{ "%.4f"|format(current_round.estimated_cost_usd) }}</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="card-body p-2">
+          {% if _vext in ['mp4', 'mov', 'avi', 'mkv'] %}
+          <video controls class="w-100 rounded"
+                 style="max-height:320px;background:#000"
+                 src="{{ url_for('session.serve_video', session_id=session.id) }}?v={{ video_mtime }}">
+            브라우저가 video 태그를 지원하지 않습니다.
+          </video>
+          {% else %}
+          <div class="alert alert-secondary py-2 mb-0 small">
+            <i class="bi bi-file-text me-1"></i>
+            <code>{{ _vfp }}</code>
+            <span class="text-muted ms-2">(mock 모드 — 실제 영상 없음)</span>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- 썸네일 추출 카드 -->
+      {% if current_round.video_file_path and current_round.status not in ['prompt_built','generating'] %}
+      <div class="card mb-3 shadow-sm">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-images me-2 text-secondary"></i>YouTube 썸네일 추출</span>
+          {% if thumbnails %}<span class="badge bg-success">{{ thumbnails|length }}장 준비됨</span>{% endif %}
+        </div>
+        <div class="card-body">
+          {% if thumbnails %}
+          <div class="row g-2 mb-2">
+            {% for thumb in thumbnails %}
+            <div class="col-4">
+              <img src="{{ url_for('session.serve_thumbnail', session_id=session.id, filename=thumb.split('/')[-1].split('\\\\')[-1]) }}"
+                   class="img-fluid rounded border" alt="썸네일 {{ loop.index }}" style="object-fit:cover;height:80px;width:100%">
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+          <form method="POST" action="{{ url_for('session.extract_thumbnails_route', session_id=session.id) }}">
+            <button type="submit" class="btn btn-sm btn-outline-secondary w-100">
+              <i class="bi bi-camera me-1"></i>
+              {% if thumbnails %}썸네일 재추출 (3장){% else %}썸네일 자동 추출 (3장){% endif %}
+            </button>
+          </form>
+          {% if not thumbnails %}
+          <small class="text-muted d-block mt-1"><i class="bi bi-info-circle me-1"></i>ffmpeg으로 균등 간격 3개 프레임 자동 추출</small>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- 자막 생성 카드 -->
+      <div class="card mb-3 shadow-sm">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-chat-square-text me-2 text-primary"></i>자막 생성 (Whisper)</span>
+          {% if current_round.srt_file_path %}
+          <span class="badge bg-success">SRT 생성됨</span>
+          {% elif not has_whisper %}
+          <span class="badge bg-warning text-dark">Whisper 미설치</span>
+          {% endif %}
+        </div>
+        <div class="card-body">
+          {% if current_round.srt_file_path %}
+          <div class="alert alert-success py-2 mb-2 small">
+            <i class="bi bi-check-circle me-1"></i>{{ current_round.srt_file_path.split('/')[-1].split('\\')[-1] }}
+          </div>
+          {% endif %}
+          {% if has_whisper %}
+          <form method="POST" action="{{ url_for('session.generate_subtitles', session_id=session.id) }}">
+            <div class="d-flex gap-2 mb-2">
+              <select name="language" class="form-select form-select-sm" style="width:auto">
+                <option value="ko" selected>한국어</option>
+                <option value="en">English</option>
+                <option value="ja">日本語</option>
+                <option value="zh">中文</option>
+              </select>
+              <div class="form-check form-check-inline align-self-center mb-0">
+                <input class="form-check-input" type="checkbox" name="burn_in" value="1" id="burnIn" checked>
+                <label class="form-check-label small" for="burnIn">영상에 하드코딩</label>
+              </div>
+            </div>
+            <button type="submit" class="btn btn-sm btn-outline-primary w-100">
+              <i class="bi bi-mic me-1"></i>
+              {% if current_round.srt_file_path %}자막 재생성{% else %}자막 자동 생성{% endif %}
+            </button>
+          </form>
+          {% else %}
+          <p class="text-muted small mb-1">자막을 생성하려면 Whisper를 설치하세요:</p>
+          <code class="small">pip install openai-whisper</code>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Step 3-B/C: 음악·립싱크 (싱잉홍보영상 전용) -->
+      {% if '싱잉홍보영상' in session.genre and current_round.status in ['video_ready', 'uploaded', 'feedback_collected', 'feedback_classified', 'feedback_clustered', 'pending_review', 'prompt_updated'] %}
+      <div class="card mb-3 shadow-sm {% if current_round.music_file_path or current_round.music_adapter %}border-warning{% endif %}">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-music-note-beamed me-2 text-warning"></i>Step 3-B: 음악 생성</span>
+          {% if current_round.music_adapter %}
+            <span class="badge bg-warning text-dark">{{ current_round.music_adapter }}</span>
+          {% endif %}
+        </div>
+        <div class="card-body">
+          {% if current_round.music_adapter %}
+          <div class="alert alert-warning py-2 mb-2">
+            <i class="bi bi-check-circle me-1"></i>
+            <strong>{{ current_round.music_adapter }}</strong> 완료
+            {% if current_round.music_file_path %}
+              — <code class="small">{{ current_round.music_file_path }}</code>
+            {% else %}
+              (mock 모드 — 파일 없음)
+            {% endif %}
+            {% if current_round.estimated_music_cost_usd %}
+              <span class="ms-2 text-muted small">${{ "%.4f"|format(current_round.estimated_music_cost_usd) }}</span>
+            {% endif %}
+          </div>
+          {% endif %}
+          <form method="POST" action="{{ url_for('session.generate_music', session_id=session.id) }}">
+            <div class="mb-2">
+              <input type="text" name="music_prompt" class="form-control form-control-sm"
+                     placeholder="음악 스타일 (비워두면 자동 설정 — audio 피드백 자동 반영)"
+                     value="{{ current_round.music_prompt or '' }}">
+              <small class="text-muted">이전 라운드 음악 피드백이 있으면 자동으로 반영됩니다.</small>
+            </div>
+            <div class="d-flex gap-2 align-items-center">
+              <select name="duration" class="form-select form-select-sm" style="width:auto">
+                <option value="10">10초</option>
+                <option value="15" selected>15초</option>
+                <option value="30">30초</option>
+              </select>
+              <button type="submit" class="btn btn-warning btn-sm flex-grow-1">
+                <i class="bi bi-music-note-list me-1"></i>
+                {% if current_round.music_adapter %}음악 재생성{% else %}음악 생성{% endif %}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Step 3-C: 립싱크 -->
+      <div class="card mb-3 shadow-sm {% if current_round.lipsync_adapter %}border-success{% endif %}">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-person-video me-2 text-success"></i>Step 3-C: 립싱크 생성</span>
+          {% if current_round.lipsync_adapter %}
+            <span class="badge bg-success">{{ current_round.lipsync_adapter }}</span>
+          {% endif %}
+        </div>
+        <div class="card-body">
+          {% if current_round.lipsync_adapter %}
+          <div class="alert alert-success py-2 mb-2">
+            <i class="bi bi-check-circle me-1"></i>
+            <strong>{{ current_round.lipsync_adapter }}</strong> 완료
+            {% if current_round.lipsync_file_path %}
+              — <code class="small">{{ current_round.lipsync_file_path }}</code>
+            {% endif %}
+          </div>
+          {% endif %}
+          <form method="POST" action="{{ url_for('session.generate_lipsync', session_id=session.id) }}"
+                enctype="multipart/form-data">
+            <div class="mb-2">
+              <label class="form-label small fw-semibold">캐릭터 이미지 (얼굴 정면 사진)</label>
+              <input type="file" name="character_image" accept="image/*" class="form-control form-control-sm">
+              {% if current_round.character_image_path %}
+              <small class="text-muted">현재: {{ current_round.character_image_path }}</small>
+              {% else %}
+              <small class="text-muted">없으면 DEFAULT_CHARACTER_IMAGE 환경변수 값 사용. mock 모드에선 이미지 불필요.</small>
+              {% endif %}
+            </div>
+            <button type="submit" class="btn btn-success btn-sm w-100">
+              <i class="bi bi-person-bounding-box me-1"></i>
+              {% if current_round.lipsync_adapter %}립싱크 재생성{% else %}립싱크 생성{% endif %}
+            </button>
+          </form>
+          {% if not current_round.music_file_path and not current_round.music_adapter %}
+          <small class="text-muted mt-1 d-block">
+            <i class="bi bi-info-circle me-1"></i>음악 생성 후 진행을 권장합니다. mock 모드로도 진행 가능합니다.
+          </small>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- BGM 생성 (영상 있을 때, 싱잉홍보영상 제외) -->
+      {% if current_round.video_file_path and current_round.status in ['video_ready', 'uploaded', 'feedback_collected', 'feedback_classified', 'feedback_clustered', 'pending_review', 'prompt_updated'] %}
+      <div class="card mb-3 shadow-sm">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-music-note-beamed me-2 text-warning"></i>BGM 생성</span>
+          <span class="badge bg-secondary">ElevenLabs Sound</span>
+        </div>
+        <div class="card-body">
+          <p class="small text-muted mb-2">영상에 BGM을 새로 생성해 교체합니다.</p>
+          <form method="POST" action="{{ url_for('session.replace_bgm', session_id=session.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="mb-2">
+              <input type="text" name="bgm_prompt" class="form-control form-control-sm"
+                     placeholder="예: calm orchestral background — 비워두면 장르 기본값"
+                     value="{{ current_round.music_prompt or '' }}">
+            </div>
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+              <select name="audio_mode" class="form-select form-select-sm" style="width:auto">
+                <option value="duck" selected>원본 유지 + BGM 믹스 (권장)</option>
+                <option value="replace">BGM으로 교체 ⚠️ 나레이션 삭제됨</option>
+              </select>
+              <button type="submit" class="btn btn-warning btn-sm">
+                <i class="bi bi-music-note-beamed me-1"></i>BGM 생성
+              </button>
+            </div>
+            <small class="text-muted mt-1 d-block">나레이션이 이미 있으면 <strong>원본 유지 + BGM 믹스</strong> 선택 필수</small>
+          </form>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- 피드백 반영 버튼 (영상 재생성 없이 오디오/후처리 피드백만 있을 때) -->
+      {% if current_round.status == 'video_ready' and feedback_applied_settings %}
+      <div class="card mb-3 shadow-sm border-success">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center" style="background:rgba(25,135,84,0.12)">
+          <span><i class="bi bi-arrow-repeat me-2 text-success"></i>피드백 반영 + 영상 재생성</span>
+          <span class="badge bg-success">자동 적용 준비됨</span>
+        </div>
+        <div class="card-body">
+          <p class="small text-muted mb-2">시각 변화 없음 — 아래 피드백 설정을 기존 영상에 바로 반영합니다.</p>
+          <ul class="list-unstyled mb-3">
+            {% for label in feedback_applied_settings %}
+            <li class="small mb-1">
+              <i class="bi bi-check-circle-fill text-success me-1"></i>{{ label }}
+            </li>
+            {% endfor %}
+          </ul>
+          <button id="btnNarrationFeedback" class="btn btn-success btn-sm" onclick="startNarration(this)">
+            <i class="bi bi-arrow-repeat me-1"></i>피드백 반영 + 영상 재생성
+          </button>
+          <div id="narrationStatusFeedback" class="mt-2 d-none">
+            <div class="d-flex align-items-center gap-2">
+              <span class="spinner-border spinner-border-sm text-success"></span>
+              <span id="narrationStatusTextFeedback" class="small text-muted">TTS 생성 중…</span>
+            </div>
+            <div class="progress mt-1" style="height:4px">
+              <div class="progress-bar bg-success progress-bar-striped progress-bar-animated" style="width:100%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Step 3-N: 나레이션 자동 생성 + 믹싱 (영상 있을 때) -->
+      {% if current_round.video_file_path and current_round.status in ['video_ready', 'uploaded', 'feedback_collected', 'feedback_classified', 'feedback_clustered', 'pending_review', 'prompt_updated'] %}
+      <div class="card mb-3 shadow-sm">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-mic-fill me-2 text-info"></i>Step 3-N: 나레이션 자동 생성 + 믹싱</span>
+          <span class="badge bg-secondary">ElevenLabs TTS</span>
+        </div>
+        <div class="card-body">
+          <p class="small text-muted mb-2">
+            프롬프트의 <code>At Xs: "..."</code> 큐를 파싱해 ElevenLabs TTS로 음성 생성 후 ffmpeg으로 타임스탬프에 정확히 삽입합니다.
+            ElevenLabs 키 없으면 gTTS(무료)로 폴백됩니다.
+          </p>
+          <button id="btnNarrationStep3" class="btn btn-info btn-sm text-white" onclick="startNarration(this)">
+            <i class="bi bi-mic-fill me-1"></i>나레이션 생성 + 영상에 삽입
+          </button>
+          <div id="narrationStatusStep3" class="mt-2 d-none">
+            <div class="d-flex align-items-center gap-2">
+              <span class="spinner-border spinner-border-sm text-info"></span>
+              <span id="narrationStatusTextStep3" class="small text-muted">TTS 생성 중…</span>
+            </div>
+            <div class="progress mt-1" style="height:4px">
+              <div class="progress-bar bg-info progress-bar-striped progress-bar-animated" style="width:100%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- 나레이션 AJAX + 폴링 -->
+      <script>
+      (function() {
+        var _narrPollTimer = null;
+
+        // 단계 표시 메시지 (경과 시간에 따라)
+        function _narrStepMsg(elapsed) {
+          if (elapsed < 15)  return 'TTS 생성 중…';
+          if (elapsed < 40)  return 'TTS 완료, 아웃트로 처리 중…';
+          if (elapsed < 90)  return '나레이션 + BGM 믹싱 중…';
+          return '마무리 중… (' + elapsed + '초 경과)';
+        }
+
+        window.startNarration = function(btn) {
+          // 어떤 버튼이든 동일한 엔드포인트 호출
+          var statusBoxId = (btn.id === 'btnNarrationFeedback') ? 'narrationStatusFeedback' : 'narrationStatusStep3';
+          var statusTextId = (btn.id === 'btnNarrationFeedback') ? 'narrationStatusTextFeedback' : 'narrationStatusTextStep3';
+          var allBtns = ['btnNarrationFeedback', 'btnNarrationStep3'];
+
+          // 모든 나레이션 버튼 비활성화
+          allBtns.forEach(function(id) {
+            var b = document.getElementById(id);
+            if (b) { b.disabled = true; b.style.opacity = '0.6'; }
+          });
+          document.getElementById(statusBoxId).classList.remove('d-none');
+          document.getElementById(statusTextId).textContent = '요청 전송 중…';
+
+          var csrfToken = document.querySelector('meta[name=csrf-token]')?.content
+                       || document.querySelector('input[name=csrf_token]')?.value || '';
+
+          fetch('{{ url_for("session.generate_narration", session_id=session.id) }}', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-Requested-With': 'XMLHttpRequest',
+            },
+            body: 'csrf_token=' + encodeURIComponent(csrfToken),
+          })
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (!data.ok) {
+              document.getElementById(statusTextId).textContent = '오류: ' + (data.message || '시작 실패');
+              allBtns.forEach(function(id) {
+                var b = document.getElementById(id);
+                if (b) { b.disabled = false; b.style.opacity = ''; }
+              });
+              return;
+            }
+            // 폴링 시작
+            var startedAt = Date.now();
+            document.getElementById(statusTextId).textContent = 'TTS 생성 중…';
+            _narrPollTimer = setInterval(function() {
+              var elapsed = Math.round((Date.now() - startedAt) / 1000);
+              document.getElementById(statusTextId).textContent = _narrStepMsg(elapsed);
+
+              fetch('{{ url_for("session.narration_status", session_id=session.id) }}')
+              .then(function(r) { return r.json(); })
+              .then(function(s) {
+                if (s.status === 'done') {
+                  clearInterval(_narrPollTimer);
+                  document.getElementById(statusTextId).textContent = '완료! 페이지를 새로고침합니다…';
+                  setTimeout(function() { location.reload(); }, 800);
+                } else if (s.status === 'running' && s.elapsed) {
+                  document.getElementById(statusTextId).textContent = _narrStepMsg(s.elapsed);
+                }
+              })
+              .catch(function() {});
+            }, 3000);
+          })
+          .catch(function(err) {
+            document.getElementById(statusTextId).textContent = '요청 실패: ' + err;
+            allBtns.forEach(function(id) {
+              var b = document.getElementById(id);
+              if (b) { b.disabled = false; b.style.opacity = ''; }
+            });
+          });
+        };
+      })();
+      </script>
+
+      <!-- 다음 단계 안내 (영상 준비 후) -->
+      {% if current_round.status in ['video_ready', 'uploaded', 'feedback_collected', 'feedback_classified', 'feedback_clustered', 'pending_review', 'prompt_updated'] %}
+      <div class="card mb-3 shadow-sm border-primary">
+        <div class="card-body d-flex align-items-center justify-content-between gap-3 py-3">
+          <div>
+            <div class="fw-semibold small mb-1">
+              <i class="bi bi-youtube me-1 text-danger"></i>다음 단계: YouTube 업로드 &amp; 피드백
+            </div>
+            <div class="text-muted small">
+              영상 생성이 완료됐습니다. 다음 페이지에서 YouTube에 업로드하고 댓글을 수집하세요.
+            </div>
+          </div>
+          <a href="{{ url_for('session.publish', session_id=session.id) }}" class="btn btn-primary btn-sm text-nowrap flex-shrink-0">
+            다음 단계 <i class="bi bi-chevron-right ms-1"></i>
+          </a>
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+
+    <!-- 우측: 통계 & 히스토리 -->
+    <div class="col-lg-5">
+
+      <!-- Before/After 영상 비교 -->
+      {% if prev_video_round and current_round and current_round.video_file_path %}
+      <div class="card mb-3 shadow-sm">
+        <div class="card-header fw-semibold"><i class="bi bi-layout-split me-2 text-success"></i>Before / After 비교</div>
+        <div class="card-body p-2">
+          <div class="row g-2">
+            <div class="col-6">
+              <div class="text-center mb-1">
+                <small class="fw-semibold text-muted">Before (R{{ prev_video_round.round_number }})</small>
+              </div>
+              {% set _prev_ext = prev_video_round.video_file_path.split('.')[-1].lower() if '.' in prev_video_round.video_file_path else '' %}
+              {% if _prev_ext in ['mp4','mov','avi','mkv'] %}
+              <video controls class="w-100 rounded" style="max-height:160px;background:#000"
+                     src="{{ url_for('session.serve_video', session_id=session.id, round_id=prev_video_round.id) }}">
+              </video>
+              {% else %}
+              <div class="alert alert-secondary py-2 small text-center">mock 영상</div>
+              {% endif %}
+            </div>
+            <div class="col-6">
+              <div class="text-center mb-1">
+                <small class="fw-semibold text-success">After (R{{ current_round.round_number }})</small>
+              </div>
+              {% set _cur_ext = current_round.video_file_path.split('.')[-1].lower() if '.' in current_round.video_file_path else '' %}
+              {% if _cur_ext in ['mp4','mov','avi','mkv'] %}
+              <video controls class="w-100 rounded" style="max-height:160px;background:#000"
+                     src="{{ url_for('session.serve_video', session_id=session.id) }}?v={{ video_mtime }}">
+              </video>
+              {% else %}
+              <div class="alert alert-secondary py-2 small text-center">mock 영상</div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- 시청자 DNA 미리보기 -->
+      {% set _has_clusters = namespace(v=false) %}
+      {% for r in all_rounds %}{% if r.cluster_results %}{% set _has_clusters.v = true %}{% endif %}{% endfor %}
+      {% if _has_clusters.v %}
+      <div class="card mb-3 shadow-sm border-info">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-people me-2 text-info"></i>시청자 DNA</span>
+          <a href="{{ url_for('session.channel_profile', session_id=session.id) }}" class="btn btn-sm btn-outline-info">전체 보기</a>
+        </div>
+        <div class="card-body py-2">
+          {% set cat_counts = {} %}
+          {% for r in all_rounds %}
+            {% for cr in r.cluster_results %}
+              {% set cat = cr.topic_category or 'other' %}
+              {% if cat in cat_counts %}
+                {% set _ = cat_counts.update({cat: cat_counts[cat] + (cr.count or 0)}) %}
+              {% else %}
+                {% set _ = cat_counts.update({cat: cr.count or 0}) %}
+              {% endif %}
+            {% endfor %}
+          {% endfor %}
+          {% for cat, cnt in cat_counts.items()|sort(attribute='1', reverse=true) %}
+          {% if loop.index <= 5 %}
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <span class="small text-truncate me-2">{{ cat }}</span>
+            <span class="badge bg-secondary rounded-pill">{{ cnt }}</span>
+          </div>
+          {% endif %}
+          {% endfor %}
+          <a href="{{ url_for('session.channel_profile', session_id=session.id) }}" class="btn btn-sm btn-outline-info w-100 mt-1">
+            <i class="bi bi-graph-up me-1"></i>재발 이슈·카테고리 분석 보기
+          </a>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- 라운드 히스토리 -->
+      {% if all_rounds|length > 1 %}
+      <div class="card mb-3 shadow-sm">
+        <div class="card-header fw-semibold"><i class="bi bi-clock-history me-2"></i>라운드 히스토리</div>
+        <div class="list-group list-group-flush">
+          {% for r in all_rounds|reverse %}
+          <div class="list-group-item {% if r.id == current_round.id %}list-group-item-primary{% endif %}">
+            <div class="d-flex justify-content-between">
+              <span class="fw-semibold small">라운드 {{ r.round_number }}</span>
+              <span class="badge bg-light text-dark border" style="font-size:0.65rem">{{ r.status|replace('_',' ') }}</span>
+            </div>
+            <div class="text-muted" style="font-size:0.72rem">{{ r.created_at.strftime('%m-%d %H:%M') }}</div>
+            {% set rc = r.feedbacks|selectattr('category','equalto','constructive')|list|length %}
+            {% set rref = r.feedbacks|selectattr('is_reflected')|list|length %}
+            {% if rc > 0 %}
+            <div class="small mt-1">반영률: <strong>{{ '%.0f'|format(rref/rc*100) }}%</strong> ({{ rref }}/{{ rc }})</div>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- 프롬프트 변경 이력 -->
+      {% if prompt_changes %}
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold"><i class="bi bi-git me-2"></i>프롬프트 변경 이력</div>
+        <div class="card-body p-0">
+          {% for pc in prompt_changes %}
+          <div class="p-3 border-bottom">
+            <div class="small text-muted mb-1">
+              R{{ pc.from_round.round_number }} → R{{ pc.to_round.round_number if pc.to_round else '?' }}
+              · {{ pc.created_at.strftime('%m-%d %H:%M') }}
+            </div>
+            <p class="small mb-1">{{ pc.change_summary }}</p>
+            <button class="btn p-0 small text-primary" type="button" data-bs-toggle="collapse" data-bs-target="#diff-{{ pc.id }}">
+              프롬프트 비교 보기
+            </button>
+            <div class="collapse mt-2" id="diff-{{ pc.id }}">
+              <div class="mb-1">
+                <small class="text-muted fw-semibold">이전:</small>
+                <pre class="p-2 rounded small" style="background:var(--diff-old-bg);white-space:pre-wrap;font-size:0.72rem">{{ pc.original_prompt[:400] }}</pre>
+              </div>
+              <div>
+                <small class="text-success fw-semibold">업데이트:</small>
+                <pre class="p-2 rounded small" style="background:var(--diff-new-bg);white-space:pre-wrap;font-size:0.72rem">{{ pc.updated_prompt[:400] }}</pre>
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% else %}
+  <div class="alert alert-warning">이 세션에 아직 라운드가 없습니다.</div>
+  {% endif %}
+</div>
+<!-- 피드백 예측 모달 -->
+<div class="modal fade" id="predictModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-lightbulb me-2 text-info"></i>AI 피드백 예측</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="predictModalBody">
+        <div class="text-center py-4">
+          <span class="spinner-border text-info me-2"></span>Gemini가 예상 시청자 반응을 분석 중...
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="https://unpkg.com/@xyflow/react@12/dist/style.css">
+<style>
+/* ── 멀티샷 시퀀스 (뉴테이크 스타일) ── */
+.shot-seq-header {
+  background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
+}
+.shot-director-bar {
+  background: var(--bs-tertiary-bg, #f0f7ff);
+  border: 1.5px dashed #3b82f6;
+  border-radius: 12px;
+}
+/* 샷 카드 */
+.shot-card-wrapper { display:flex; align-items:flex-start; flex-shrink:0; scroll-snap-align:start; }
+.shot-card {
+  min-width: 228px; max-width: 248px;
+  border-radius: 12px; flex-shrink: 0;
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color) !important;
+  border-left: 4px solid var(--bs-secondary) !important;
+  box-shadow: 0 2px 10px rgba(0,0,0,.07);
+  transition: box-shadow .2s, transform .15s, border-left-color .25s;
+}
+.shot-card:hover { box-shadow: 0 6px 22px rgba(0,0,0,.13); transform: translateY(-2px); }
+.shot-card.status-pending  { border-left-color: #94a3b8 !important; }
+.shot-card.status-generating {
+  border-left-color: #f59e0b !important;
+  animation: shotPulseGlow 1.4s ease-in-out infinite;
+}
+.shot-card.status-done   { border-left-color: #10b981 !important; }
+.shot-card.status-failed { border-left-color: #ef4444 !important; }
+/* 샷 번호 뱃지 */
+.shot-num-badge {
+  width:22px; height:22px; border-radius:50%;
+  background: var(--bs-primary); color:#fff;
+  font-size:10px; font-weight:700;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+}
+/* 연결선 */
+.shot-connector {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  padding: 0 10px; flex-shrink:0; min-height:170px; gap:3px;
+}
+.shot-connector-thumb {
+  width:38px; height:28px; object-fit:cover;
+  border-radius:5px; border:2px solid var(--bs-primary); opacity:.85;
+}
+.shot-connector-arrow {
+  width:30px; height:2px;
+  background: linear-gradient(90deg, transparent 0%, var(--bs-primary) 55%);
+}
+.shot-connector-chevron { font-size:9px; color:var(--bs-primary); margin-top:1px; }
+.shot-connector-label { font-size:8px; color:var(--bs-secondary); white-space:nowrap; }
+/* 체이닝 이미지 */
+.shot-last-frame {
+  width:100%; height:78px; object-fit:cover;
+  border-radius:8px; margin-bottom:6px;
+  border:1px solid rgba(0,0,0,.06);
+}
+/* 프롬프트 텍스트에리어 */
+.shot-prompt-ta {
+  font-size:.78rem; resize:none;
+  background: var(--bs-tertiary-bg, #f8f9fa) !important;
+  color: var(--bs-body-color) !important;
+  border-color: var(--bs-border-color) !important;
+  border-radius:8px !important;
+}
+.shot-prompt-ta:focus {
+  box-shadow: 0 0 0 .15rem rgba(13,110,253,.18) !important;
+}
+/* 스크롤 트랙 */
+.shot-sequence-track {
+  display:flex; overflow-x:auto; padding-bottom:14px;
+  scroll-snap-type:x mandatory; align-items:flex-start;
+  min-height:210px; gap:0;
+  scrollbar-width:thin;
+}
+.shot-sequence-track::-webkit-scrollbar { height:4px; }
+.shot-sequence-track::-webkit-scrollbar-track { background:transparent; }
+.shot-sequence-track::-webkit-scrollbar-thumb {
+  background: var(--bs-border-color); border-radius:2px;
+}
+/* 다크 모드 */
+[data-bs-theme="dark"] .shot-seq-header {
+  background: linear-gradient(135deg, #070d1a 0%, #0f2040 100%);
+}
+[data-bs-theme="dark"] .shot-director-bar {
+  background: rgba(59,130,246,.08);
+}
+[data-bs-theme="dark"] .shot-card {
+  box-shadow: 0 2px 10px rgba(0,0,0,.3);
+}
+[data-bs-theme="dark"] .shot-last-frame {
+  border-color: rgba(255,255,255,.08);
+}
+/* 생성중 글로우 */
+@keyframes shotPulseGlow {
+  0%,100% { box-shadow: 0 2px 10px rgba(245,158,11,.15); }
+  50%      { box-shadow: 0 4px 22px rgba(245,158,11,.55); }
+}
+
+/* ── 영상 생성 방식 탭 ── */
+.generation-mode-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--surface-3, rgba(0,0,0,.08));
+  border-radius: 10px;
+  padding: 4px;
+}
+.gen-tab {
+  flex: 1;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-2, #666);
+  transition: background .15s, color .15s;
+}
+.gen-tab.active {
+  background: var(--surface-1, #fff);
+  color: var(--accent, #6366f1);
+  box-shadow: 0 1px 4px rgba(0,0,0,.12);
+}
+
+/* ── 멀티샷 패널 ── */
+.multishot-panel {
+  border: 1px solid var(--border, #dee2e6);
+  border-radius: 10px;
+  padding: 14px;
+  background: var(--surface-2, #f8f9fa);
+}
+.multishot-director-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(99,102,241,.06);
+  border: 1px dashed rgba(99,102,241,.35);
+  border-radius: 8px;
+  padding: 10px 12px;
+  flex-wrap: wrap;
+}
+.multishot-director-icon {
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  background: var(--accent, #6366f1);
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+.multishot-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 10px;
+  margin-top: 6px;
+  border-top: 1px solid var(--border, #dee2e6);
+}
+.shot-empty-state {
+  width: 100%;
+  text-align: center;
+  padding: 32px 0;
+  color: var(--text-2, #888);
+  font-size: 2rem;
+  opacity: .5;
+}
+
+/* ── 시퀀스 확정 배너 ── */
+.finalize-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(34,197,94,.08);
+  border: 1px solid rgba(34,197,94,.25);
+  border-radius: 10px;
+  padding: 12px 16px;
+  flex-wrap: wrap;
+}
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function togglePromptEdit() {
+  const display = document.getElementById('promptDisplay');
+  const edit = document.getElementById('promptEditArea');
+  const isEditing = edit.style.display !== 'none';
+  display.style.display = isEditing ? 'block' : 'none';
+  edit.style.display = isEditing ? 'none' : 'block';
+}
+
+// 폼 제출 시 버튼 비활성화 + 스피너 (중복 클릭 방지)
+document.querySelectorAll('[data-loading-btn] button[type="submit"]').forEach(btn => {
+  btn.closest('form').addEventListener('submit', () => {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>요청 중...';
+  });
+});
+
+// 세션 삭제 확인
+function confirmDeleteSession() {
+  if (confirm('이 프로젝트와 모든 관련 데이터(영상·피드백·클러스터)를 영구 삭제합니다.\n되돌릴 수 없습니다. 계속하시겠습니까?')) {
+    document.getElementById('deleteSessionForm').submit();
+  }
+}
+
+{% if current_round and current_round.status == 'generating' %}
+// 영상 생성 중: SSE 우선, 폴백으로 5초 폴링 (SSE 연결 실패 시)
+(function() {
+  let sseActive = false;
+  function reload() { window.location.reload(); }
+
+  // SSE 시도
+  if (typeof EventSource !== 'undefined') {
+    const es = new EventSource('{{ url_for("session.api_generation_status_stream", session_id=session.id) }}');
+    sseActive = true;
+    es.onmessage = function(ev) {
+      try {
+        const d = JSON.parse(ev.data);
+        if (d.status && d.status !== 'generating') { es.close(); reload(); }
+      } catch(_) {}
+    };
+    es.onerror = function() { es.close(); sseActive = false; startPoll(); };
+  } else { startPoll(); }
+
+  // 폴링 폴백
+  function startPoll() {
+    const url = '{{ url_for("session.api_status", session_id=session.id) }}';
+    const iv = setInterval(async () => {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const d = await res.json();
+        const st = d.current_round && d.current_round.status;
+        if (st && st !== 'generating') { clearInterval(iv); reload(); }
+      } catch(_) {}
+    }, 5000);
+  }
+})();
+{% endif %}
+
+// 피드백 반영 후 자동 스크롤
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('prompt_ready')) {
+    const card = document.getElementById('promptCard');
+    if (card) {
+      setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'start' }), 400);
+    }
+  }
+})();
+
+// ── 안전한 DOM 빌더 (XSS 방지 — innerHTML 직접 사용 금지) ────────────────────
+function _safeText(str) {
+  const d = document.createTextNode(str || '');
+  const s = document.createElement('span');
+  s.appendChild(d);
+  return s.outerHTML;
+}
+function _safePurify(html) {
+  return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html, {FORCE_BODY: true}) : '';
+}
+
+// AI 피드백 예측 로드
+async function loadFeedbackPrediction() {
+  const body = document.getElementById('predictModalBody');
+  body.innerHTML = '<div class="text-center py-4"><span class="spinner-border text-info me-2"></span>Gemini가 예상 시청자 반응을 분석 중...</div>';
+  try {
+    const res = await fetch('{{ url_for("session.api_predict_feedback", session_id=session.id) }}', { method: 'POST' });
+    const d = await res.json();
+    const frag = document.createDocumentFragment();
+
+    if (d.warnings && d.warnings.length) {
+      const div = document.createElement('div');
+      div.className = 'alert alert-warning py-2 mb-3';
+      const title = document.createElement('strong');
+      title.textContent = '⚠ 생성 전 확인 사항';
+      div.appendChild(title);
+      const ul = document.createElement('ul');
+      ul.className = 'mb-0 mt-1';
+      d.warnings.forEach(w => { const li = document.createElement('li'); li.className = 'small'; li.textContent = w; ul.appendChild(li); });
+      div.appendChild(ul);
+      frag.appendChild(div);
+    }
+    if (d.positive && d.positive.length) {
+      const wrap = document.createElement('div'); wrap.className = 'mb-3';
+      const hdr = document.createElement('div'); hdr.className = 'fw-semibold text-success mb-1'; hdr.textContent = '👍 예상 긍정 반응';
+      wrap.appendChild(hdr);
+      d.positive.forEach(p => { const el = document.createElement('div'); el.className = 'small border rounded p-2 mb-1 bg-success bg-opacity-10'; el.textContent = p; wrap.appendChild(el); });
+      frag.appendChild(wrap);
+    }
+    if (d.constructive && d.constructive.length) {
+      const wrap = document.createElement('div'); wrap.className = 'mb-2';
+      const hdr = document.createElement('div'); hdr.className = 'fw-semibold text-warning mb-1'; hdr.textContent = '💬 예상 건설적 피드백';
+      wrap.appendChild(hdr);
+      d.constructive.forEach(c => {
+        const pct = Math.round((c.likelihood || 0) * 100);
+        const card = document.createElement('div'); card.className = 'border rounded p-2 mb-1';
+        const top = document.createElement('div'); top.className = 'd-flex justify-content-between';
+        const badge = document.createElement('span'); badge.className = 'badge bg-info text-dark'; badge.textContent = c.category || '';
+        const sm = document.createElement('small'); sm.className = 'text-muted'; sm.textContent = `가능성 ${pct}%`;
+        top.appendChild(badge); top.appendChild(sm); card.appendChild(top);
+        const txt = document.createElement('div'); txt.className = 'small mt-1'; txt.textContent = c.feedback || '';
+        card.appendChild(txt);
+        const prog = document.createElement('div'); prog.className = 'progress mt-1'; prog.style.height = '4px';
+        const bar = document.createElement('div'); bar.className = 'progress-bar bg-warning'; bar.style.width = pct + '%';
+        prog.appendChild(bar); card.appendChild(prog);
+        wrap.appendChild(card);
+      });
+      frag.appendChild(wrap);
+    }
+    body.innerHTML = '';
+    if (frag.childNodes.length) { body.appendChild(frag); }
+    else { const p = document.createElement('p'); p.className = 'text-muted'; p.textContent = '예측 데이터를 불러올 수 없습니다.'; body.appendChild(p); }
+  } catch (e) {
+    const div = document.createElement('div'); div.className = 'alert alert-danger'; div.textContent = '예측 실패: ' + e.message; body.innerHTML = ''; body.appendChild(div);
+  }
+}
+
+// 키보드 단축키 (클러스터 검토 페이지가 아닌 detail 페이지에서만)
+document.addEventListener('keydown', function(e) {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  // Alt+G: 영상 생성 폼 제출
+  if (e.altKey && e.key === 'g') {
+    const genForm = document.getElementById('generateVideoForm');
+    if (genForm) { e.preventDefault(); genForm.requestSubmit(); }
+  }
+  // Alt+R: 리포트 페이지
+  if (e.altKey && e.key === 'r') {
+    window.location.href = '{{ url_for("session.report", session_id=session.id) }}';
+  }
+});
+
+// ══════════════════════════════════════════════════════════
+// 멀티샷 시퀀스 (F-A/F-B) — 프레임 체이닝 + AI Director
+// ══════════════════════════════════════════════════════════
+const SESSION_ID = {{ session.id }};
+const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
+let shots = [];
+// shot: {id, prompt, camera, note, status, lastFramePath, lastFrameUrl, videoPath}
+
+// HTML 특수문자 이스케이프 (XSS 방지 — innerHTML에 AI 출력 삽입 시 사용)
+function _esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+// 상태별 스타일 테이블
+const _SHOT_STATUS = {
+  pending:    { bg:'var(--bs-secondary-bg,#e2e8f0)', color:'#64748b',  label:'대기' },
+  generating: { bg:'#fef3c7',  color:'#92400e', label:'생성 중' },
+  done:       { bg:'#d1fae5',  color:'#065f46', label:'완료'   },
+  failed:     { bg:'#fee2e2',  color:'#991b1b', label:'실패'   },
+};
+
+// ── 생성 방식 탭 전환 ───────────────────────────────────────
+function switchGenTab(mode) {
+  document.getElementById('panelSingle').style.display     = mode === 'single'     ? 'block' : 'none';
+  document.getElementById('panelMultishot').style.display  = mode === 'multishot'  ? 'block' : 'none';
+  document.getElementById('tabSingle').classList.toggle('active',    mode === 'single');
+  document.getElementById('tabMultishot').classList.toggle('active', mode === 'multishot');
+}
+
+// ── 시퀀스 확정 ─────────────────────────────────────────────
+async function finalizeShots() {
+  const doneShots = shots.filter(s => s.status === 'done' && s.jobId);
+  if (!doneShots.length) {
+    showToast('완료된 샷이 없습니다', 'warning');
+    return;
+  }
+  const btn = document.getElementById('btnFinalizeSeq');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>저장 중...';
+  try {
+    const resp = await fetch(`/session/${SESSION_ID}/api/finalize_shot_sequence`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+      body: JSON.stringify({ job_ids: doneShots.map(s => s.jobId) }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      showToast('시퀀스 확정 완료 — 파이프라인을 계속합니다', 'success');
+      setTimeout(() => location.reload(), 1200);
+    } else {
+      throw new Error(data.error || '확정 실패');
+    }
+  } catch (e) {
+    showToast('확정 실패: ' + e.message, 'danger');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-check2-all me-2"></i>시퀀스 확정 → 파이프라인 계속';
+  }
+}
+
+function shotUpdateStats() {
+  const el = document.getElementById('shotStats');
+  if (!el) return;
+  if (!shots.length) { el.innerHTML = ''; return; }
+  const c = shots.reduce((a, s) => { a[s.status] = (a[s.status]||0)+1; return a; }, {});
+  el.textContent = `${shots.length}샷`;
+  if (c.done)       el.textContent += ` · ${c.done} 완료`;
+  if (c.generating) el.textContent += ` · ${c.generating} 생성중`;
+  if (c.failed)     el.textContent += ` · ${c.failed} 실패`;
+
+  // 모든 샷 완료 시 확정 버튼 표시
+  const finalizeArea = document.getElementById('finalizeArea');
+  if (finalizeArea) {
+    const allDone = shots.length > 0 && shots.every(s => s.status === 'done') && shots.some(s => s.jobId);
+    finalizeArea.style.display = allDone ? 'block' : 'none';
+  }
+}
+
+function shotRender() {
+  const container = document.getElementById('shotContainer');
+  if (!container) return;
+
+  if (window.shotCanvasUpdate) window.shotCanvasUpdate(_shotsForCanvas());
+  shotUpdateStats();
+
+  container.innerHTML = '';
+
+  if (!shots.length) {
+    container.innerHTML = `
+      <div class="w-100 text-center py-5 text-muted">
+        <i class="bi bi-film d-block mb-3" style="font-size:3rem;opacity:.18"></i>
+        <div class="fw-semibold mb-1">샷이 없습니다</div>
+        <div class="small mb-3" style="opacity:.65">AI Director로 자동 분해하거나 직접 추가하세요</div>
+        <button class="btn btn-sm btn-outline-secondary" onclick="shotAddManual()" style="border-radius:20px">
+          <i class="bi bi-plus-circle me-1"></i>샷 직접 추가
+        </button>
+      </div>`;
+    return;
+  }
+
+  shots.forEach((shot, idx) => {
+    // 연결선 (첫 샷 제외) — 이전 샷 마지막 프레임 썸네일 포함
+    if (idx > 0) {
+      const prev = shots[idx - 1];
+      const conn = document.createElement('div');
+      conn.className = 'shot-connector';
+      conn.innerHTML = prev.lastFrameUrl
+        ? `<img src="${prev.lastFrameUrl}" class="shot-connector-thumb" title="이전 클립 마지막 프레임">
+           <div class="shot-connector-arrow"></div>
+           <i class="bi bi-chevron-right shot-connector-chevron"></i>
+           <span class="shot-connector-label">마지막 프레임</span>`
+        : `<i class="bi bi-three-dots-vertical" style="font-size:8px;opacity:.3"></i>
+           <div class="shot-connector-arrow"></div>
+           <i class="bi bi-chevron-right shot-connector-chevron"></i>
+           <span class="shot-connector-label">체이닝</span>`;
+      container.appendChild(conn);
+    }
+
+    const st    = _SHOT_STATUS[shot.status] || _SHOT_STATUS.pending;
+    const isGen = shot.status === 'generating';
+    const isDone = shot.status === 'done';
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'shot-card-wrapper';
+    wrapper.innerHTML = `
+      <div class="shot-card status-${shot.status}" data-shot-id="${shot.id}">
+        <div class="p-3">
+          <!-- 헤더: 샷 번호 + 상태 -->
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <div class="d-flex align-items-center gap-2">
+              <div class="shot-num-badge">${idx + 1}</div>
+              <span class="fw-semibold" style="font-size:.82rem">샷 ${idx + 1}</span>
+            </div>
+            <span style="font-size:.66rem;padding:2px 9px;border-radius:20px;
+                         background:${st.bg};color:${st.color};font-weight:600">
+              ${isGen ? `<span class="spinner-border" style="width:8px;height:8px;border-width:1.5px;vertical-align:middle"></span> ` : ''}${st.label}
+            </span>
+          </div>
+          <!-- 이전 프레임 미리보기 (체이닝) -->
+          ${shot.lastFrameUrl ? `
+            <div class="position-relative mb-2">
+              <img src="${shot.lastFrameUrl}" class="shot-last-frame"
+                   title="이전 클립 마지막 프레임 → 이 클립 참조">
+              <span class="position-absolute bottom-0 start-0 ms-1 mb-1"
+                    style="font-size:8px;background:rgba(0,0,0,.58);color:#fff;
+                           border-radius:6px;padding:2px 6px">
+                <i class="bi bi-link-45deg"></i> 체이닝
+              </span>
+            </div>` : ''}
+          <!-- 프롬프트 -->
+          <textarea class="form-control form-control-sm shot-prompt-ta mb-2" rows="3"
+                    placeholder="샷 프롬프트 (영어)..."
+                    oninput="shots[${idx}].prompt=this.value"
+          >${shot.prompt || ''}</textarea>
+          <!-- 카메라 힌트 -->
+          ${shot.camera ? `
+            <div class="d-flex align-items-center gap-1 mb-1">
+              <i class="bi bi-camera2 text-muted" style="font-size:9px"></i>
+              <small class="text-muted" style="font-size:.72rem">${_esc(shot.camera)}</small>
+            </div>` : ''}
+          ${shot.note ? `
+            <small class="text-muted fst-italic" style="font-size:.7rem;display:block">${_esc(shot.note)}</small>
+          ` : ''}
+        </div>
+        <!-- 액션 바 -->
+        <div class="px-3 pb-3 d-flex justify-content-between align-items-center"
+             style="border-top:1px solid var(--bs-border-color);padding-top:10px;margin-top:2px">
+          <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                  onclick="shotRemove(${idx})"
+                  style="font-size:.72rem;border-radius:20px" title="샷 삭제">
+            <i class="bi bi-trash" style="font-size:.7rem"></i>
+          </button>
+          <button class="btn btn-sm ${isDone ? 'btn-outline-success' : 'btn-primary'} py-1 px-3"
+                  onclick="shotGenerateOne(${idx})"
+                  ${isGen ? 'disabled' : ''}
+                  style="font-size:.74rem;border-radius:20px">
+            ${isGen
+              ? `<span class="spinner-border" style="width:10px;height:10px;border-width:1.5px"></span>`
+              : isDone
+              ? `<i class="bi bi-arrow-clockwise me-1"></i>재생성`
+              : `<i class="bi bi-play-fill me-1"></i>생성`}
+          </button>
+        </div>
+      </div>`;
+    container.appendChild(wrapper);
+  });
+}
+
+function shotAddManual() {
+  shots.push({ id: Date.now(), prompt: '', camera: '', note: '', status: 'pending',
+               lastFrameUrl: null, lastFramePath: null, videoPath: null });
+  shotRender();
+}
+
+function shotRemove(idx) {
+  shots.splice(idx, 1);
+  shotRender();
+}
+
+async function shotAutoDecompose(event) {
+  const btn = document.getElementById('btnDecompose');
+  const numShots = parseInt(document.getElementById('shotNumSelect').value) || 4;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>분해 중...';
+
+  try {
+    const resp = await fetch(`/session/${SESSION_ID}/api/decompose_shots`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+      body: JSON.stringify({ num_shots: numShots }),
+    });
+    const data = await resp.json();
+    if (data.shots && data.shots.length > 0) {
+      shots = data.shots.map((s, i) => ({
+        id: Date.now() + i,
+        prompt: s.prompt || '',
+        camera: s.camera || '',
+        note: s.note || '',
+        status: 'pending',
+        lastFrameUrl: null, lastFramePath: null, videoPath: null,
+      }));
+      shotRender();
+      showToast(`${shots.length}개 샷으로 자동 분해 완료`, 'success');
+    } else {
+      showToast('분해 실패: ' + (data.error || '알 수 없는 오류'), 'danger');
+    }
+  } catch (e) {
+    showToast('네트워크 오류: ' + e.message, 'danger');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-magic me-1"></i>자동 분해';
+  }
+}
+
+async function shotGenerateAll() {
+  const btn = document.getElementById('btnGenAll');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" style="width:12px;height:12px;border-width:2px"></span>생성 중…';
+  try {
+    for (let i = 0; i < shots.length; i++) {
+      if (shots[i].status === 'done') continue;
+      await shotGenerateOne(i);
+      if (shots[i].status === 'failed') break;
+    }
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-play-fill me-1"></i>전체 생성';
+  }
+}
+
+async function shotGenerateOne(idx) {
+  const shot = shots[idx];
+  if (!shot.prompt.trim()) {
+    showToast(`샷 ${idx + 1} 프롬프트를 입력하세요.`, 'warning');
+    return;
+  }
+  shot.status = 'generating';
+  shotRender();
+
+  // 이전 완료 샷의 마지막 프레임 경로 (프레임 체이닝)
+  const prevDone = idx > 0 ? shots[idx - 1] : null;
+  const prevFramePath = (prevDone && prevDone.status === 'done') ? (prevDone.lastFramePath || null) : null;
+
+  try {
+    // 1) 비동기 생성 시작 → job_id 받기
+    const kickResp = await fetch(`/session/${SESSION_ID}/api/generate_shot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+      body: JSON.stringify({ prompt: shot.prompt, prev_last_frame_path: prevFramePath }),
+    });
+    const kickData = await kickResp.json();
+    if (!kickData.job_id) {
+      throw new Error(kickData.error || '잡 생성 실패');
+    }
+    const jobId = kickData.job_id;
+    shot.jobId = jobId;  // 확정 시 서버 조회용
+
+    // 2) 완료 폴링 (5초 간격, 최대 20분)
+    const maxPolls = 240;
+    for (let p = 0; p < maxPolls; p++) {
+      await new Promise(r => setTimeout(r, 5000));
+      const pollResp = await fetch(`/session/${SESSION_ID}/api/shot_status/${jobId}`);
+      const pollData = await pollResp.json();
+      if (pollData.status === 'done') {
+        shot.status = 'done';
+        shot.videoPath = pollData.video_path;
+        shot.lastFramePath = pollData.last_frame_path;
+        shot.lastFrameUrl  = pollData.last_frame_url;
+        shotRender();
+        showToast(`샷 ${idx + 1} 생성 완료`, 'success');
+        return;
+      } else if (pollData.status === 'failed') {
+        throw new Error(pollData.error || '생성 실패');
+      }
+      // status === 'running': 계속 폴링
+    }
+    throw new Error('생성 시간 초과 (20분)');
+  } catch (e) {
+    shot.status = 'failed';
+    shot.error = e.message;
+    shotRender();
+    showToast(`샷 ${idx + 1} 실패: ${e.message}`, 'danger');
+  }
+}
+
+// React Flow 캔버스용 shot 데이터 변환
+function _shotsForCanvas() {
+  return shots.map(s => ({
+    prompt:       s.prompt  || '',
+    camera:       s.camera  || '',
+    status:       s.status  || 'pending',
+    lastFrameUrl: s.lastFrameUrl || null,
+  }));
+}
+
+// 노드 캔버스 토글
+function toggleShotCanvas(btn) {
+  const wrapper = document.getElementById('shotCanvasWrapper');
+  if (!wrapper) return;
+  const hidden = wrapper.style.display === 'none';
+  wrapper.style.display = hidden ? 'block' : 'none';
+  btn.innerHTML = hidden
+    ? '<i class="bi bi-diagram-2 me-1"></i>노드 캔버스 숨기기'
+    : '<i class="bi bi-diagram-2 me-1"></i>노드 캔버스 보기';
+  if (hidden && window.shotCanvasUpdate) {
+    window.shotCanvasUpdate(_shotsForCanvas());
+  }
+}
+
+// 초기 렌더링
+shotRender();
+</script>
+<!-- React Flow CDN — 멀티샷 노드 캔버스 (island component) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script>
+/* @xyflow/react UMD가 window.jsxRuntime을 요구 — React.createElement로 심 제공 */
+if (window.React && !window.jsxRuntime) {
+  window.jsxRuntime = {
+    jsx: React.createElement,
+    jsxs: React.createElement,
+    Fragment: React.Fragment,
+  };
+}
+</script>
+<script src="https://unpkg.com/@xyflow/react@12/dist/umd/index.js"></script>
+<script src="{{ url_for('static', filename='js/shot_canvas.js') }}"></script>
+{% endblock %}

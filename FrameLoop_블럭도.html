@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FrameLoop — AI 영상 자동 개선 파이프라인</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:     #080a14;
+  --surface:#0f1221;
+  --card:   #141829;
+  --border: #1e2440;
+  --border2:#2a3158;
+  --fg:     #dde3f8;
+  --mute:   #6d7a9f;
+  --mute2:  #4d5878;
+
+  --user:   #7c6cf5;
+  --flask:  #3b82f6;
+  --ai:     #a855f7;
+  --db:     #10b981;
+  --ext:    #f59e0b;
+  --yt:     #ef4444;
+  --mix:    #14b8a6;
+
+  --radius-node: 10px;
+  --font: 'Noto Sans KR', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+html { background: var(--bg); color: var(--fg); font-family: var(--font); }
+
+body {
+  min-height: 100vh;
+  padding: 24px clamp(16px, 4vw, 48px) 36px;
+}
+
+.page { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
+/* ── Header ── */
+.hdr { display: flex; flex-direction: column; gap: 6px; }
+.hdr h1 {
+  font-size: clamp(1rem, 2.2vw, 1.22rem);
+  font-weight: 900;
+  letter-spacing: -.02em;
+  color: var(--fg);
+}
+.hdr p { font-size: .8rem; color: var(--mute); line-height: 1.55; }
+
+/* ── Legend ── */
+.legend {
+  display: flex; flex-wrap: wrap; gap: 4px 14px;
+  font-size: .75rem; color: var(--mute);
+}
+.legend span { display: flex; align-items: center; gap: 5px; }
+.legend b {
+  width: 9px; height: 9px; border-radius: 3px;
+  display: inline-block; flex-shrink: 0;
+}
+
+/* ── Diagram stage ── */
+.stage {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 8px 8px 4px;
+  overflow-x: auto;
+  /* inner shadow for depth */
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+}
+svg {
+  display: block;
+  width: 100%;
+  min-width: 700px;
+  height: auto;
+}
+
+/* ── Node styles ── */
+.node { transition: opacity .35s ease; cursor: default; }
+.node rect { transition: opacity .35s ease, filter .35s ease; }
+.node text { fill: #fff; font-family: var(--font); pointer-events: none; }
+.node .tl { font-size: 14px; font-weight: 700; letter-spacing: -.01em; }
+.node .sl { font-size: 10px; opacity: .78; }
+
+.dim { opacity: .16; }
+.lit rect { filter: drop-shadow(0 0 12px currentColor); }
+
+/* ── Edge styles ── */
+.edge {
+  fill: none;
+  stroke-width: 2;
+  stroke-dasharray: 8 5;
+  opacity: .14;
+  transition: opacity .35s ease;
+}
+.edge.on { opacity: 1; animation: dash 1.1s linear infinite; }
+@keyframes dash { to { stroke-dashoffset: -26; } }
+
+/* ── Progress bar ── */
+.progbar {
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progbar span {
+  display: block; height: 100%; width: 0;
+  background: linear-gradient(90deg, var(--user) 0%, var(--ai) 50%, var(--yt) 100%);
+  transition: width .5s ease;
+  border-radius: 2px;
+}
+
+/* ── Caption box ── */
+.caption {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 20px;
+  min-height: 4.2em;
+  text-align: center;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+}
+.caption .step-num {
+  font-size: .7rem;
+  font-family: var(--mono);
+  color: var(--mute2);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.caption strong {
+  font-size: .96rem;
+  font-weight: 700;
+  color: var(--fg);
+  line-height: 1.3;
+}
+.caption p {
+  font-size: .84rem;
+  color: var(--mute);
+  line-height: 1.6;
+  max-width: 72ch;
+}
+
+/* ── Controls ── */
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.dots { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.dots button {
+  width: 26px; height: 26px; border-radius: 50%;
+  font-size: .68rem; font-family: var(--mono); font-weight: 600;
+  padding: 0;
+  background: var(--card); border: 1px solid var(--border);
+  color: var(--mute); cursor: pointer;
+  transition: background .2s, border-color .2s, color .2s;
+}
+.dots button:hover { border-color: var(--border2); color: var(--fg); }
+.dots button.cur { background: var(--user); border-color: var(--user); color: #fff; }
+
+.btn {
+  font: 500 .82rem / 1 var(--font);
+  padding: 9px 20px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--fg); cursor: pointer;
+  transition: border-color .2s, background .2s;
+}
+.btn:hover { border-color: var(--border2); }
+.btn.primary {
+  background: var(--user); border-color: var(--user); color: #fff;
+}
+.btn.primary:hover { background: #9585f8; border-color: #9585f8; }
+
+@media (prefers-reduced-motion: reduce) { .edge.on { animation: none; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="hdr">
+    <h1>FrameLoop — AI 영상 자동 개선 파이프라인 구조도</h1>
+    <p>1라운드에서 영상을 생성·업로드하고, YouTube 댓글 피드백을 자동 분석해 개선된 프롬프트로 2라운드 영상을 제작합니다. 매 라운드마다 자동 반복됩니다.</p>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend">
+    <span><b style="background:var(--user)"></b>사용자</span>
+    <span><b style="background:var(--flask)"></b>Flask 서버</span>
+    <span><b style="background:var(--ai)"></b>AI 엔진 (LLM · Kling · 분류기)</span>
+    <span><b style="background:var(--ext)"></b>ElevenLabs TTS · BGM</span>
+    <span><b style="background:var(--mix)"></b>ffmpeg · 영상 후처리</span>
+    <span><b style="background:var(--yt)"></b>YouTube</span>
+    <span><b style="background:var(--db)"></b>SQLite DB</span>
+  </div>
+
+  <!-- Diagram -->
+  <div class="stage">
+<svg viewBox="0 0 1320 582" role="img" aria-label="FrameLoop AI 영상 파이프라인 블록도">
+<defs>
+  <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5"
+    markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M0 1.5L8.5 5L0 8.5z" fill="context-stroke"/>
+  </marker>
+
+  <!-- Section A gradient (영상 제작) -->
+  <linearGradient id="gA" x1="0%" y1="0%" x2="100%" y2="100%">
+    <stop offset="0%"   stop-color="#a855f7" stop-opacity=".10"/>
+    <stop offset="100%" stop-color="#3b82f6" stop-opacity=".04"/>
+  </linearGradient>
+  <!-- Section B gradient (피드백 루프) -->
+  <linearGradient id="gB" x1="100%" y1="0%" x2="0%" y2="100%">
+    <stop offset="0%"   stop-color="#ef4444" stop-opacity=".08"/>
+    <stop offset="100%" stop-color="#10b981" stop-opacity=".08"/>
+  </linearGradient>
+
+  <!-- Feedback path glow -->
+  <filter id="glow">
+    <feGaussianBlur stdDeviation="3" result="blur"/>
+    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+
+<!-- ════════════════════════════════════
+     섹션 배경
+════════════════════════════════════ -->
+
+<!-- Section A: 영상 제작 파이프라인 -->
+<rect x="12" y="50" width="1296" height="260" rx="14" fill="url(#gA)"
+      stroke="#1e2440" stroke-width="1"/>
+
+<!-- Section B: 피드백 자동 분석 루프 -->
+<rect x="12" y="378" width="1296" height="108" rx="14" fill="url(#gB)"
+      stroke="#1e2440" stroke-width="1"/>
+
+<!-- 섹션 레이블 -->
+<text x="26" y="68" font-size="10.5" fill="#4d5878" font-family="'Noto Sans KR',sans-serif"
+      font-weight="500" letter-spacing=".04em">영상 제작 파이프라인 (매 라운드 실행)</text>
+
+<text x="26" y="395" font-size="10.5" fill="#4d5878" font-family="'Noto Sans KR',sans-serif"
+      font-weight="500" letter-spacing=".04em">피드백 자동 분석 · 개선 루프</text>
+
+<!-- 라운드 표시 (우측 상단) -->
+<text x="1294" y="68" font-size="10" fill="#4d5878" font-family="'JetBrains Mono',monospace"
+      text-anchor="end">Round 1 → 2 → 3 → ···</text>
+<text x="1083" y="373" font-size="10" fill="#4d5878" font-family="'JetBrains Mono',monospace"
+      text-anchor="end">자동 반복</text>
+
+<!-- ════════════════════════════════════
+     에지 (Edges)
+════════════════════════════════════ -->
+
+<!-- ── Row 1: user → flask → llm → kling ── -->
+<path id="e1" class="edge" stroke="var(--user)"  marker-end="url(#arr)" d="M190 104 H258"/>
+<path id="e2" class="edge" stroke="var(--flask)" marker-end="url(#arr)" d="M433 104 H508"/>
+<path id="e3" class="edge" stroke="var(--ai)"    marker-end="url(#arr)" d="M703 104 H775"/>
+
+<!-- ── Row 1 → Row 2: llm → tts, kling → ffmpeg ── -->
+<path id="e_llm_tts"      class="edge" stroke="var(--ext)" marker-end="url(#arr)"
+      d="M605 136 C605 176 130 176 130 222"/>
+<path id="e_kling_ffmpeg" class="edge" stroke="var(--ai)"  marker-end="url(#arr)"
+      d="M882 136 C882 197 398 197 398 222"/>
+
+<!-- ── Row 2: tts → ffmpeg → outro → ytup ── -->
+<path id="e_tts_ffmpeg"   class="edge" stroke="var(--ext)" marker-end="url(#arr)" d="M230 254 H298"/>
+<path id="e_ffmpeg_outro" class="edge" stroke="var(--mix)" marker-end="url(#arr)" d="M498 254 H556"/>
+<path id="e_outro_ytup"   class="edge" stroke="var(--mix)" marker-end="url(#arr)" d="M756 254 H814"/>
+
+<!-- ── ytup → yt (Section A → Section B, 대각선) ── -->
+<path id="e_ytup_yt" class="edge" stroke="var(--yt)" marker-end="url(#arr)" d="M914 286 C914 340 1190 340 1190 390"/>
+
+<!-- ── Row 3: yt → filter → db → classify → cluster (우→좌) ── -->
+<path id="e_yt_filter"         class="edge" stroke="var(--yt)"  marker-end="url(#arr)" d="M1090 422 H1025"/>
+<path id="e_filter_db"         class="edge" stroke="var(--ai)"  marker-end="url(#arr)" d="M825 422 H760"/>
+<path id="e_db_classify"       class="edge" stroke="var(--db)"  marker-end="url(#arr)" d="M560 422 H495"/>
+<path id="e_classify_cluster"  class="edge" stroke="var(--ai)"  marker-end="url(#arr)" d="M295 422 H230"/>
+
+<!-- ── 피드백 루프: cluster → llm (개선된 프롬프트, 하단 우회) ── -->
+<path id="e_feedback" class="edge" stroke="var(--user)" stroke-width="2.5"
+      marker-end="url(#arr)" d="M130 462 C130 540 527 540 527 136"/>
+
+<!-- 피드백 루프 레이블 -->
+<text x="328" y="556" font-size="10" fill="#4d5878" font-family="'Noto Sans KR',sans-serif"
+      text-anchor="middle">개선된 프롬프트 → 2라운드, 3라운드... 자동 반복</text>
+
+<!-- ytup→yt 레이블 -->
+<text x="1062" y="334" font-size="10" fill="#4d5878" font-family="'Noto Sans KR',sans-serif" text-anchor="middle">댓글 수집 ↓</text>
+
+<!-- ════════════════════════════════════
+     노드
+════════════════════════════════════ -->
+
+<!-- ─── ROW 1: 영상 제작 시작 ─── -->
+<g class="node" id="n-user" style="color:var(--user)">
+  <rect x="30"  y="72" width="160" height="64" rx="10" fill="var(--user)"/>
+  <text class="tl" x="110" y="99"  text-anchor="middle">사용자/브라우저</text>
+  <text class="sl" x="110" y="117" text-anchor="middle">초기 대본 · 프롬프트 입력</text>
+</g>
+
+<g class="node" id="n-flask" style="color:var(--flask)">
+  <rect x="258" y="72" width="175" height="64" rx="10" fill="var(--flask)"/>
+  <text class="tl" x="345" y="99"  text-anchor="middle">Flask 서버</text>
+  <text class="sl" x="345" y="117" text-anchor="middle">session.py · 라운드 관리</text>
+</g>
+
+<g class="node" id="n-llm" style="color:var(--ai)">
+  <rect x="508" y="72" width="195" height="64" rx="10" fill="var(--ai)"/>
+  <text class="tl" x="605" y="99"  text-anchor="middle">Gemini LLM</text>
+  <text class="sl" x="605" y="117" text-anchor="middle">프롬프트 생성 · 개선</text>
+</g>
+
+<g class="node" id="n-kling" style="color:var(--ai)">
+  <rect x="775" y="72" width="215" height="64" rx="10" fill="var(--ai)"/>
+  <text class="tl" x="882" y="97"  text-anchor="middle">Kling V3  (fal.ai)</text>
+  <text class="sl" x="882" y="113" text-anchor="middle">Image-to-Video · 22초</text>
+  <text class="sl" x="882" y="127" text-anchor="middle">15s + 7s 클립 · $0.084/s</text>
+</g>
+
+<!-- ─── ROW 2: 오디오 생성 · 합성 · 출력 ─── -->
+<g class="node" id="n-tts" style="color:var(--ext)">
+  <rect x="30"  y="222" width="200" height="64" rx="10" fill="var(--ext)"/>
+  <text class="tl" x="130" y="245" text-anchor="middle">ElevenLabs</text>
+  <text class="sl" x="130" y="259" text-anchor="middle">TTS eleven_v4 · 5종 보이스</text>
+  <text class="sl" x="130" y="274" text-anchor="middle">피드백 기반 자동 보이스 선택</text>
+</g>
+
+<g class="node" id="n-ffmpeg" style="color:var(--mix)">
+  <rect x="298" y="222" width="200" height="64" rx="10" fill="var(--mix)"/>
+  <text class="tl" x="398" y="249" text-anchor="middle">ffmpeg 믹서</text>
+  <text class="sl" x="398" y="267" text-anchor="middle">영상 + 나레이션 + BGM 합성</text>
+</g>
+
+<g class="node" id="n-outro" style="color:var(--mix)">
+  <rect x="556" y="222" width="200" height="64" rx="10" fill="var(--mix)"/>
+  <text class="tl" x="656" y="249" text-anchor="middle">영상 후처리</text>
+  <text class="sl" x="656" y="267" text-anchor="middle">로고 아웃트로 6초 · 페이드아웃</text>
+</g>
+
+<g class="node" id="n-ytup" style="color:var(--yt)">
+  <rect x="814" y="222" width="200" height="64" rx="10" fill="var(--yt)"/>
+  <text class="tl" x="914" y="249" text-anchor="middle">YouTube 업로드</text>
+  <text class="sl" x="914" y="267" text-anchor="middle">업로드 또는 URL 직접 등록</text>
+</g>
+
+<!-- ─── ROW 3: 피드백 자동 분석 (우→좌, 5노드) ─── -->
+<g class="node" id="n-yt" style="color:var(--yt)">
+  <rect x="1090" y="390" width="200" height="64" rx="10" fill="var(--yt)"/>
+  <text class="tl" x="1190" y="414" text-anchor="middle">YouTube 댓글 수집</text>
+  <text class="sl" x="1190" y="430" text-anchor="middle">Data API v3</text>
+  <text class="sl" x="1190" y="445" text-anchor="middle">5분 쓰로틀링</text>
+</g>
+
+<g class="node" id="n-filter" style="color:var(--ai)">
+  <rect x="825" y="390" width="200" height="64" rx="10" fill="var(--ai)"/>
+  <text class="tl" x="925" y="414" text-anchor="middle">피드백 필터</text>
+  <text class="sl" x="925" y="430" text-anchor="middle">규칙 기반 · 건설성 분류</text>
+  <text class="sl" x="925" y="445" text-anchor="middle">constructive / spam / 부적절</text>
+</g>
+
+<g class="node" id="n-db" style="color:var(--db)">
+  <rect x="560" y="390" width="200" height="64" rx="10" fill="var(--db)"/>
+  <text class="tl" x="660" y="414" text-anchor="middle">SQLite DB</text>
+  <text class="sl" x="660" y="430" text-anchor="middle">10 테이블 · WAL 모드</text>
+  <text class="sl" x="660" y="445" text-anchor="middle">Feedback · ClusterResult 등</text>
+</g>
+
+<g class="node" id="n-classify" style="color:var(--ai)">
+  <rect x="295" y="390" width="200" height="64" rx="10" fill="var(--ai)"/>
+  <text class="tl" x="395" y="414" text-anchor="middle">6축 피드백 분류기</text>
+  <text class="sl" x="395" y="430" text-anchor="middle">특이도 · 타당성 · 심각도</text>
+  <text class="sl" x="395" y="445" text-anchor="middle">긴급도 · 품질 · 실행가능성</text>
+</g>
+
+<g class="node" id="n-cluster" style="color:var(--ai)">
+  <rect x="30"  y="390" width="200" height="64" rx="10" fill="var(--ai)"/>
+  <text class="tl" x="130" y="414" text-anchor="middle">클러스터러</text>
+  <text class="sl" x="130" y="430" text-anchor="middle">계층적 클러스터링</text>
+  <text class="sl" x="130" y="445" text-anchor="middle">5축 우선순위 공식</text>
+</g>
+
+<!-- 승인 단계 인디케이터 (cluster 우측, 피드백 루프 시작점) -->
+<rect x="248" y="462" width="108" height="18" rx="9" stroke="#4d5878" stroke-width="1" fill="none" stroke-dasharray="3 2"/>
+<text x="302" y="474" font-size="9.5" fill="#6d7a9f" text-anchor="middle" font-family="'Noto Sans KR',sans-serif">인간 검토 · 승인 포함</text>
+
+</svg>
+  </div><!-- .stage -->
+
+  <!-- Progress bar -->
+  <div class="progbar"><span id="prog"></span></div>
+
+  <!-- Caption -->
+  <div class="caption" aria-live="polite">
+    <div class="step-num" id="stepnum"></div>
+    <strong id="ct"></strong>
+    <p id="cd"></p>
+  </div>
+
+  <!-- Dot navigation -->
+  <div class="dots" id="dots"></div>
+
+  <!-- Play controls -->
+  <div class="controls">
+    <button class="btn" id="prev" aria-label="이전 단계">← 이전</button>
+    <button class="btn primary" id="play">▶ 자동 재생</button>
+    <button class="btn" id="next" aria-label="다음 단계">다음 →</button>
+  </div>
+
+</div><!-- .page -->
+
+<script>
+var STEPS = [
+  {
+    t: '1라운드 시작 — 초기 프롬프트 입력',
+    d: '관리자가 Flask 웹 UI에서 영상 주제·장르·스타일을 입력하고 첫 번째 라운드를 생성합니다. 2라운드부터는 클러스터러가 생성한 개선 프롬프트가 자동으로 사용됩니다.',
+    nodes: ['user','flask'], edges: ['e1']
+  },
+  {
+    t: 'Gemini LLM — 프롬프트 & 나레이션 대본 생성',
+    d: 'Gemini(gemini-3.1-flash-lite)가 Kling 영상 생성용 프롬프트(AUDIO 섹션·주석 제거 버전 포함)와 ElevenLabs 나레이션 대본을 동시에 생성합니다.',
+    nodes: ['flask','llm'], edges: ['e2']
+  },
+  {
+    t: 'Kling V3 영상 생성 — Shot Pipeline',
+    d: 'fal.ai Kling V3 Standard(fal-ai/kling-video/v3/standard/text-to-video)로 Image-to-Video 방식 15초 + 7초 클립을 순차 생성·concat합니다. 총 22초. 직전 Shot의 마지막 프레임을 ffmpeg으로 추출해 다음 Shot의 시작 이미지로 체이닝합니다.',
+    nodes: ['llm','kling'], edges: ['e3']
+  },
+  {
+    t: 'ElevenLabs — 나레이션 & BGM 병렬 생성',
+    d: 'LLM 대본의 "At Ns: 텍스트" 큐를 파싱해 eleven_v4로 나레이션을 생성합니다. voice_selector가 피드백 키워드(AI같다/단조롭다/여성 등)를 분석해 Victor·Hyunbin·Mr.J·Hyuk·Jisoo 5개 카탈로그에서 최적 보이스를 자동 선택하고, 감정 태그(proud/excited/inspired)와 속도도 피드백에 맞게 조정됩니다. BGM은 ElevenLabs Sound API로 병렬 생성됩니다.',
+    nodes: ['llm','tts'], edges: ['e_llm_tts']
+  },
+  {
+    t: 'ffmpeg — 오디오·영상 합성 · Whisper SRT 생성',
+    d: 'Kling 영상과 나레이션·BGM을 ffmpeg로 합성합니다. Windows 파이프 데드락 방지를 위해 임시 파일 I/O 방식을 사용하며 bgm_db·narration_db 볼륨은 GlobalTechnicalSetting으로 조정됩니다. 합성 완료 후 faster-whisper(small 모델)가 음성 인식으로 SRT 자막을 자동 생성합니다.',
+    nodes: ['kling','tts','ffmpeg'], edges: ['e_kling_ffmpeg','e_tts_ffmpeg']
+  },
+  {
+    t: '영상 후처리 — 로고 아웃트로 합성',
+    d: '6초 로고 카드를 ultrafast 프리셋(threads=2)으로 생성하고 1.5초 페이드아웃을 단일 ffmpeg 명령으로 연결합니다. 최종 영상 약 28초, 파일 크기 약 50MB.',
+    nodes: ['ffmpeg','outro'], edges: ['e_ffmpeg_outro']
+  },
+  {
+    t: 'YouTube 등록 — 1라운드 완성',
+    d: '완성 영상을 YouTube에 업로드하거나 이미 업로드된 영상의 URL을 직접 입력해 등록합니다. 1라운드 영상이 공개되고 시청자 댓글이 쌓이기 시작합니다.',
+    nodes: ['outro','ytup'], edges: ['e_outro_ytup']
+  },
+  {
+    t: 'YouTube 댓글 자동 수집',
+    d: '업로드된 영상에 달린 댓글을 YouTube API로 수집합니다. 5분 쓰로틀링으로 반복 요청을 방지하며 SIMULATION_MODE=true로 실제 업로드 없이 테스트도 가능합니다.',
+    nodes: ['ytup','yt'], edges: ['e_ytup_yt']
+  },
+  {
+    t: '피드백 필터링 — 건설성 분류',
+    d: 'feedback_filter.py가 규칙 기반으로 각 댓글을 constructive / non_constructive / spam / inappropriate 4가지로 분류합니다. 건설적(constructive) 피드백만 다음 단계로 넘겨 DB에 저장됩니다.',
+    nodes: ['yt','filter'], edges: ['e_yt_filter']
+  },
+  {
+    t: 'SQLite DB — 피드백 저장',
+    d: '건설적 피드백을 SQLite DB(pipeline.db)에 저장합니다. 10개 테이블(PipelineSession, VideoRound, Feedback, ClusterResult, PromptVersion, GlobalTechnicalSetting 등)을 WAL 모드·32MB 캐시로 관리합니다.',
+    nodes: ['filter','db'], edges: ['e_filter_db']
+  },
+  {
+    t: '6축 피드백 분류',
+    d: 'paraphrase-multilingual-MiniLM-L12-v2 임베딩 모델로 각 피드백을 특이도·타당성·심각도·긴급도·품질·실행가능성 6가지 축으로 코사인 유사도 기반 점수화합니다. 카테고리 적응형 임계값(0.26~0.48)을 사용합니다.',
+    nodes: ['db','classify'], edges: ['e_db_classify']
+  },
+  {
+    t: '계층적 클러스터링 & 우선순위 계산',
+    d: 'AgglomerativeClustering으로 유사 피드백을 그룹화합니다. 우선순위 P = 0.35·빈도 + 0.25·품질 + 0.20·심각도 + 0.12·긴급도 + 0.08·타당도. 재발 피드백 최대 +30%, 모순 피드백 ×0.60 감점.',
+    nodes: ['classify','cluster'], edges: ['e_classify_cluster']
+  },
+  {
+    t: '클러스터 승인 검토 — 인간 검토 단계',
+    d: 'approval.py가 클러스터 상태를 pending_review로 전환합니다. 관리자가 웹 UI에서 각 클러스터를 approved / rejected / deferred로 검토합니다. YouTube 댓글 내 프롬프트 인젝션 공격은 정규식으로 탐지·차단됩니다.',
+    nodes: ['cluster'], edges: []
+  },
+  {
+    t: '피드백 루프 — 2라운드 프롬프트 자동 개선',
+    d: 'approved 클러스터 요약이 Gemini에 전달됩니다. LLM이 이전 라운드 문제점을 반영한 개선된 Kling 프롬프트와 ElevenLabs BGM 프롬프트를 생성합니다. PromptVersion 모델에 변경 내역(unified diff)이 저장되고 2라운드가 자동 시작됩니다.',
+    nodes: ['cluster','llm'], edges: ['e_feedback']
+  },
+  {
+    t: '전체 루프 완성 — 라운드마다 자동 개선',
+    d: '영상 생성 → YouTube → 댓글 수집 → 피드백 필터 → 6축 분류 → 클러스터링 → 관리자 승인 → LLM 프롬프트 개선 → 다음 라운드. 관리자의 클러스터 승인을 거쳐 시청자 피드백이 누적·반영되어 영상 품질이 라운드마다 향상됩니다.',
+    all: true
+  }
+];
+
+var IDS = ['user','flask','llm','kling','tts','ffmpeg','outro','ytup','yt','filter','db','classify','cluster'];
+var EDGES = Array.from(document.querySelectorAll('.edge')).map(function(el){ return el.id; });
+var cur = 0, timer = null, N = STEPS.length;
+
+function render() {
+  var s = STEPS[cur];
+  IDS.forEach(function(id) {
+    var g = document.getElementById('n-' + id);
+    var on = s.all || (s.nodes && s.nodes.indexOf(id) !== -1);
+    g.classList.toggle('dim', !on);
+    g.classList.toggle('lit', !!on && !s.all);
+  });
+  EDGES.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.classList.toggle('on', !!s.all || (s.edges && s.edges.indexOf(id) !== -1));
+  });
+  document.getElementById('stepnum').textContent = 'STEP ' + (cur + 1) + ' / ' + N;
+  document.getElementById('ct').textContent = s.t;
+  document.getElementById('cd').textContent = s.d;
+  document.getElementById('prog').style.width = ((cur + 1) / N * 100) + '%';
+  document.querySelectorAll('#dots button').forEach(function(b, i) {
+    b.classList.toggle('cur', i === cur);
+  });
+}
+
+function go(n) { cur = (n + N) % N; render(); }
+
+function stop() {
+  clearInterval(timer); timer = null;
+  var btn = document.getElementById('play');
+  btn.textContent = '▶ 자동 재생';
+  btn.classList.add('primary');
+}
+
+function play() {
+  if (timer) { stop(); return; }
+  var btn = document.getElementById('play');
+  btn.textContent = '⏸ 일시정지';
+  btn.classList.add('primary');
+  timer = setInterval(function() {
+    if (cur >= N - 1) { stop(); return; }
+    go(cur + 1);
+  }, 3800);
+}
+
+// 도트 생성
+var dotsEl = document.getElementById('dots');
+STEPS.forEach(function(s, i) {
+  var b = document.createElement('button');
+  b.textContent = i < N - 1 ? String(i + 1) : '✓';
+  b.setAttribute('aria-label', s.t);
+  b.onclick = function() { stop(); go(i); };
+  dotsEl.appendChild(b);
+});
+
+document.getElementById('prev').onclick = function() { stop(); go(cur - 1); };
+document.getElementById('next').onclick = function() { stop(); go(cur + 1); };
+document.getElementById('play').onclick = function() { if (cur >= N - 1) go(0); play(); };
+
+// 키보드 지원
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'ArrowLeft')  { stop(); go(cur - 1); }
+  if (e.key === 'ArrowRight') { stop(); go(cur + 1); }
+  if (e.key === ' ') { e.preventDefault(); if (cur >= N - 1) go(0); play(); }
+});
+
+render();
+</script>
+</body>
+</html>

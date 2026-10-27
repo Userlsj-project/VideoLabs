@@ -1,0 +1,405 @@
+{% extends "base.html" %}
+{% block title %}분석 리포트 — {{ session.title }}{% endblock %}
+
+{% block page_title %}분석 리포트{% endblock %}
+
+{% block topbar_actions %}
+  <a href="{{ url_for('session.detail', session_id=session.id) }}" class="btn btn-sm btn-ghost">
+    <i class="bi bi-play-circle me-1"></i>파이프라인
+  </a>
+{% endblock %}
+
+{% block content %}
+<div class="container-xl">
+
+  {% if not metrics %}
+  <div class="alert alert-info">
+    <i class="bi bi-info-circle me-2"></i>아직 피드백 반영 데이터가 없습니다. 파이프라인을 최소 1회 완전히 실행하세요.
+  </div>
+  {% else %}
+
+  <!-- 전체 요약 카드 -->
+  {% set total_rounds = metrics|length %}
+  {% set total_comments = metrics|sum(attribute='total_comments') %}
+
+  <div class="row g-3 mb-4">
+    <div class="col-sm-6 col-lg-3">
+      <div class="card text-center border-primary h-100">
+        <div class="card-body">
+          <div class="display-6 fw-bold text-primary">{{ '%.1f'|format(avg_reflection) }}%</div>
+          <div class="text-muted small">평균 반영률</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+      <div class="card text-center border-success h-100">
+        <div class="card-body">
+          {% if best_metric %}
+          <div class="display-6 fw-bold text-success">{{ '%.1f'|format(best_metric.reflection_rate * 100) }}%</div>
+          <div class="text-muted small">최고 반영률 (라운드 {{ best_metric.round_number }})</div>
+          {% else %}
+          <div class="display-6 fw-bold text-muted">-</div>
+          <div class="text-muted small">최고 반영률</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+      <div class="card text-center border-info h-100">
+        <div class="card-body">
+          <div class="display-6 fw-bold text-info">{{ total_rounds }}</div>
+          <div class="text-muted small">완료된 라운드</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+      <div class="card text-center border-warning h-100">
+        <div class="card-body">
+          <div class="display-6 fw-bold text-warning">{{ total_comments }}</div>
+          <div class="text-muted small">총 수집 댓글</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 예상 영상 생성 비용 -->
+  <div class="card shadow-sm mb-4">
+    <div class="card-header card-header-active fw-semibold"><i class="bi bi-currency-dollar me-2 text-danger"></i>예상 영상 생성 비용</div>
+    <div class="card-body">
+      <div class="row align-items-center mb-3">
+        <div class="col-auto">
+          <span class="fs-4 fw-bold text-danger">${{ '%.2f'|format(total_estimated_cost) }}</span>
+          <span class="text-muted ms-2">총 누적 예상 비용 (USD)</span>
+        </div>
+      </div>
+      <table class="table table-sm table-bordered">
+        <thead class="table-light"><tr><th>라운드</th><th>어댑터</th><th>예상 비용 (USD)</th></tr></thead>
+        <tbody>
+          {% for item in cost_by_round %}
+          <tr>
+            <td>Round {{ item.round_number }}</td>
+            <td><span class="badge {% if item.adapter == 'kling' %}bg-success{% elif item.adapter == 'runway' %}bg-warning text-dark{% else %}bg-secondary{% endif %}">{{ item.adapter }}</span></td>
+            <td>${{ '%.2f'|format(item.cost_usd) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="text-muted small mb-0">* mock 어댑터는 실제 비용이 발생하지 않습니다. kling/runway 단가는 어댑터 설정 기준 추정치입니다.</p>
+    </div>
+  </div>
+
+  <!-- 반영률 추이 차트 -->
+  <div class="row g-4 mb-4">
+    <div class="col-lg-8">
+      <div class="card shadow-sm h-100">
+        <div class="card-header card-header-active fw-semibold"><i class="bi bi-graph-up me-2 text-primary"></i>라운드별 반영률 추이</div>
+        <div class="card-body">
+          <canvas id="reflectionChart" height="200"></canvas>
+          <div id="reflectionData"
+               data-rounds="{{ metrics|map(attribute='round_number')|list|tojson }}"
+               data-rates="{{ metrics|map(attribute='reflection_rate')|list|tojson }}"
+               data-constructive="{{ metrics|map(attribute='constructive_count')|list|tojson }}"
+               data-reflected="{{ metrics|map(attribute='reflected_count')|list|tojson }}"
+               style="display:none"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-header fw-semibold"><i class="bi bi-pie-chart me-2"></i>전체 댓글 분류 분포</div>
+        <div class="card-body">
+          <canvas id="categoryChart" height="200"></canvas>
+          <div id="categoryData"
+               data-c="{{ metrics|sum(attribute='constructive_count') }}"
+               data-nc="{{ metrics|sum(attribute='non_constructive_count') }}"
+               data-s="{{ metrics|sum(attribute='spam_count') }}"
+               data-i="{{ metrics|sum(attribute='inappropriate_count') }}"
+               style="display:none"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 시간 단축 효과 -->
+  {% set time_metrics = metrics|selectattr('time_savings_percent')|list %}
+  {% if time_metrics %}
+  <div class="card mb-4 shadow-sm">
+    <div class="card-header fw-semibold"><i class="bi bi-stopwatch me-2 text-success"></i>반영 소요 시간 단축 효과 (보조 지표)</div>
+    <div class="card-body">
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead class="table-light">
+            <tr>
+              <th>라운드</th>
+              <th>건설적 피드백 수</th>
+              <th>자동 파이프라인 (초)</th>
+              <th>수동 추정 시간 (분)</th>
+              <th>시간 단축 효과</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for m in time_metrics %}
+            <tr>
+              <td><strong>R{{ m.round_number }}</strong></td>
+              <td>{{ m.constructive_count }}</td>
+              <td>{{ '%.1f'|format(m.auto_pipeline_seconds or 0) }}초</td>
+              <td>{{ '%.1f'|format((m.manual_estimate_seconds or 0)/60) }}분</td>
+              <td>
+                <div class="d-flex align-items-center gap-2">
+                  <div class="progress flex-grow-1" style="height:10px">
+                    <div class="progress-bar bg-success" style="width:{{ m.time_savings_percent|round }}%"></div>
+                  </div>
+                  <span class="fw-bold text-success">{{ '%.1f'|format(m.time_savings_percent) }}%</span>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <small class="text-muted">* 수동 추정 시간: 댓글 1개당 {{ manual_minutes }}분 기준</small>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- 라운드별 상세 테이블 -->
+  <div class="card shadow-sm mb-4">
+    <div class="card-header fw-semibold"><i class="bi bi-table me-2"></i>라운드별 상세 지표</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>라운드</th>
+              <th>총 댓글</th>
+              <th>건설적</th>
+              <th>스팸</th>
+              <th>부적절</th>
+              <th>반영 수</th>
+              <th>반영률</th>
+              <th>측정일시</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for m in metrics %}
+            <tr>
+              <td><strong>R{{ m.round_number }}</strong></td>
+              <td>{{ m.total_comments }}</td>
+              <td><span class="badge bg-success">{{ m.constructive_count }}</span></td>
+              <td><span class="badge bg-warning text-dark">{{ m.spam_count }}</span></td>
+              <td><span class="badge bg-danger">{{ m.inappropriate_count }}</span></td>
+              <td><span class="badge bg-primary">{{ m.reflected_count }}</span></td>
+              <td>
+                <div class="d-flex align-items-center gap-1">
+                  <div class="progress" style="width:60px;height:8px">
+                    <div class="progress-bar {{ 'bg-success' if m.reflection_rate >= 0.7 else ('bg-warning' if m.reflection_rate >= 0.4 else 'bg-danger') }}"
+                         style="width:{{ (m.reflection_rate*100)|round }}%"></div>
+                  </div>
+                  <span class="small fw-bold">{{ '%.1f'|format(m.reflection_rate*100) }}%</span>
+                </div>
+              </td>
+              <td><small class="text-muted">{{ m.calculated_at.strftime('%m-%d %H:%M') }}</small></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 피드백 ROI: 라운드 간 불만 감소율 -->
+  {% if roi_data %}
+  <div class="card shadow-sm mb-4">
+    <div class="card-header fw-semibold">
+      <i class="bi bi-graph-down-arrow me-2 text-success"></i>피드백 ROI — 라운드별 불만 감소율
+      <small class="text-muted ms-2 fw-normal">피드백 반영 후 같은 주제의 불만이 얼마나 줄었는지</small>
+    </div>
+    <div class="card-body">
+      {% for item in roi_data %}
+      <div class="mb-4">
+        <h6 class="fw-semibold mb-3">
+          <span class="badge bg-secondary">R{{ item.from_round }}</span>
+          <i class="bi bi-arrow-right mx-2 text-muted"></i>
+          <span class="badge bg-primary">R{{ item.to_round }}</span>
+          적용 결과
+        </h6>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>카테고리</th>
+                <th class="text-center">이전 (R{{ item.from_round }})</th>
+                <th class="text-center">이후 (R{{ item.to_round }})</th>
+                <th>변화</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for c in item.comparisons %}
+              <tr>
+                <td><span class="badge bg-info text-dark">{{ c.category }}</span></td>
+                <td class="text-center fw-bold">{{ c.prev_count }}</td>
+                <td class="text-center fw-bold">{{ c.next_count }}</td>
+                <td style="min-width:160px">
+                  <div class="d-flex align-items-center gap-2">
+                    {% if c.change_pct > 0 %}
+                    <div class="progress flex-grow-1" style="height:10px">
+                      <div class="progress-bar bg-success" style="width:{{ [c.change_pct|round, 100]|min }}%"></div>
+                    </div>
+                    <span class="text-success fw-bold small">▼{{ '%.0f'|format(c.change_pct) }}%</span>
+                    {% elif c.change_pct < 0 %}
+                    <div class="progress flex-grow-1" style="height:10px">
+                      <div class="progress-bar bg-danger" style="width:{{ [(-c.change_pct)|round, 100]|min }}%"></div>
+                    </div>
+                    <span class="text-danger fw-bold small">▲{{ '%.0f'|format(-c.change_pct) }}%</span>
+                    {% else %}
+                    <div class="progress flex-grow-1" style="height:10px">
+                      <div class="progress-bar bg-secondary" style="width:50%"></div>
+                    </div>
+                    <span class="text-muted small">변화 없음</span>
+                    {% endif %}
+                  </div>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% if not loop.last %}<hr>{% endif %}
+      {% endfor %}
+      <small class="text-muted">* 동일 카테고리의 건설적 피드백 수 비교. 수집된 댓글 수 차이로 오차 가능.</small>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- 프롬프트 변경 이력 -->
+  {% if prompt_changes %}
+  <div class="card shadow-sm">
+    <div class="card-header fw-semibold"><i class="bi bi-git me-2"></i>프롬프트 변경 이력 (피드백 반영 로그)</div>
+    <div class="card-body p-0">
+      {% for pc in prompt_changes %}
+      <div class="p-4 border-bottom">
+        <div class="d-flex justify-content-between mb-2 flex-wrap gap-2">
+          <div>
+            <span class="badge bg-secondary me-1">R{{ pc.from_round.round_number }} → R{{ pc.to_round.round_number if pc.to_round else '?' }}</span>
+            <span class="text-muted small">{{ pc.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+          </div>
+          <span class="badge bg-primary">{{ pc.get_reflected_feedback_ids()|length }}개 피드백 반영</span>
+        </div>
+        <p class="mb-3">{{ pc.change_summary }}</p>
+        <div class="row g-2">
+          <div class="col-md-6">
+            <div class="fw-semibold small text-warning mb-1"><i class="bi bi-dash-circle me-1"></i>이전 프롬프트</div>
+            <pre class="p-3 rounded small" style="background:var(--diff-old-bg);white-space:pre-wrap;max-height:200px;overflow-y:auto">{{ pc.original_prompt }}</pre>
+          </div>
+          <div class="col-md-6">
+            <div class="fw-semibold small text-success mb-1"><i class="bi bi-plus-circle me-1"></i>업데이트된 프롬프트</div>
+            <pre class="p-3 rounded small" style="background:var(--diff-new-bg);white-space:pre-wrap;max-height:200px;overflow-y:auto">{{ pc.updated_prompt }}</pre>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  // 반영률 추이 차트
+  const rd = document.getElementById('reflectionData');
+  if (rd) {
+    const rounds = JSON.parse(rd.dataset.rounds);
+    const rates = JSON.parse(rd.dataset.rates).map(r => (r * 100).toFixed(1));
+    const constructive = JSON.parse(rd.dataset.constructive);
+    const reflected = JSON.parse(rd.dataset.reflected);
+
+    const chartDefaults = {
+      color: 'rgba(232,232,244,0.7)',
+      borderColor: 'rgba(42,42,62,0.8)',
+    };
+    Chart.defaults.color = chartDefaults.color;
+    Chart.defaults.borderColor = chartDefaults.borderColor;
+
+    new Chart(document.getElementById('reflectionChart'), {
+      type: 'line',
+      data: {
+        labels: rounds.map(r => '라운드 ' + r),
+        datasets: [
+          {
+            label: '반영률 (%)',
+            data: rates,
+            borderColor: '#818cf8',
+            backgroundColor: 'rgba(99,102,241,0.12)',
+            yAxisID: 'y',
+            fill: true,
+            tension: 0.3,
+          },
+          {
+            label: '건설적 피드백 수',
+            data: constructive,
+            borderColor: '#22c55e',
+            backgroundColor: 'rgba(34,197,94,0.25)',
+            yAxisID: 'y1',
+            type: 'bar',
+          },
+          {
+            label: '반영 완료 수',
+            data: reflected,
+            borderColor: '#06b6d4',
+            backgroundColor: 'rgba(6,182,212,0.25)',
+            yAxisID: 'y1',
+            type: 'bar',
+          },
+        ]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          y: {
+            type: 'linear',
+            position: 'left',
+            min: 0, max: 100,
+            title: { display: true, text: '반영률 (%)' },
+            grid: { color: 'rgba(42,42,62,0.8)' },
+          },
+          y1: {
+            type: 'linear',
+            position: 'right',
+            min: 0,
+            title: { display: true, text: '피드백 수' },
+            grid: { drawOnChartArea: false },
+          }
+        },
+        plugins: { legend: { position: 'bottom', labels: { color: 'rgba(232,232,244,0.7)' } } }
+      }
+    });
+  }
+
+  // 카테고리 도넛 차트
+  const cd = document.getElementById('categoryData');
+  if (cd) {
+    new Chart(document.getElementById('categoryChart'), {
+      type: 'doughnut',
+      data: {
+        labels: ['건설적', '비건설적', '스팸', '부적절'],
+        datasets: [{
+          data: [cd.dataset.c, cd.dataset.nc, cd.dataset.s, cd.dataset.i],
+          backgroundColor: ['rgba(34,197,94,0.7)','rgba(100,116,139,0.7)','rgba(245,158,11,0.7)','rgba(239,68,68,0.7)'],
+          borderColor: ['#22c55e','#64748b','#f59e0b','#ef4444'],
+          borderWidth: 1,
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, color: 'rgba(232,232,244,0.7)' } } },
+        cutout: '55%',
+      }
+    });
+  }
+});
+</script>
+{% endblock %}

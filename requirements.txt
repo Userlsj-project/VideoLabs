@@ -1,0 +1,39 @@
+flask>=3.0.0
+flask-sqlalchemy>=3.1.0
+flask-cors>=4.0.0
+# 보안: CSRF 보호
+flask-wtf>=1.2.0
+# 보안: API 비율 제한
+flask-limiter>=3.5.0
+anthropic>=0.34.0
+sentence-transformers>=3.0.0
+scikit-learn>=1.5.0
+numpy>=1.26.0
+pandas>=2.2.0
+matplotlib>=3.9.0
+google-api-python-client>=2.140.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.0
+# Google Gemini / Veo API (텍스트 생성 + Veo 영상 생성)
+# ⚠️ GEMINI_TEXT_API_KEY(무료)와 VEO_API_KEY(유료)는 반드시 별도 프로젝트에서 발급
+google-genai>=0.8.0
+python-dotenv>=1.0.0
+requests>=2.32.0
+plotly>=5.22.0
+# 선택적 의존성: 설치 시 HDBSCAN 밀도 기반 클러스터링 활성화 (없으면 AgglomerativeClustering 폴백)
+hdbscan>=0.8.33
+# 선택적: faster-whisper (openai-whisper 대비 4배 빠름, 8배 낮은 메모리)
+faster-whisper>=1.0.0
+# 선택적: 채널 미적 일관성 지문 분석 (opencv)
+opencv-python-headless>=4.10.0
+# fal.ai Seedance 영상 생성 (VIDEO_GENERATOR_ADAPTER=fal 시 사용)
+fal-client>=0.10.0
+# 나레이션 TTS (ElevenLabs Starter 이상, 한국어 고품질 음성)
+elevenlabs>=2.0.0
+# 나레이션 TTS 폴백 (무료, 인터넷 필요)
+gtts>=2.5.0
+# 영상 화질 업스케일 (720p → 1080p, Real-ESRGAN AI)
+realesrgan>=0.3.0
+basicsr>=1.4.2
+facexlib>=0.3.0
+torchvision>=0.15.0

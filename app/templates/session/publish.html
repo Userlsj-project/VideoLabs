@@ -1,0 +1,379 @@
+{% extends "base.html" %}
+{% block title %}YouTube 업로드 — {{ session.title }}{% endblock %}
+
+{% block page_title %}
+  {{ session.title }}
+  <span class="badge bg-secondary ms-2" style="font-size:11px;font-weight:500">{{ session.genre }}</span>
+{% endblock %}
+
+{% block topbar_actions %}
+  <a href="{{ url_for('session.systemic_issues', session_id=session.id) }}"
+     class="btn btn-sm btn-ghost" title="반복 이슈">
+    <i class="bi bi-diagram-3 me-1"></i><span class="d-none d-md-inline">반복이슈</span>
+  </a>
+  <a href="{{ url_for('session.character_profiles', session_id=session.id) }}"
+     class="btn btn-sm btn-ghost" title="캐릭터 프로파일">
+    <i class="bi bi-person-circle me-1"></i><span class="d-none d-md-inline">캐릭터</span>
+  </a>
+  <a href="{{ url_for('session.version_history', session_id=session.id) }}"
+     class="btn btn-sm btn-ghost" title="프롬프트 버전 이력">
+    <i class="bi bi-clock-history me-1"></i><span class="d-none d-md-inline">버전 이력</span>
+  </a>
+  <a href="{{ url_for('session.report', session_id=session.id) }}"
+     class="btn btn-sm btn-accent">
+    <i class="bi bi-bar-chart-line me-1"></i><span class="d-none d-md-inline">리포트</span>
+  </a>
+  <button type="button" class="btn btn-sm btn-ghost btn-danger-ghost"
+          onclick="confirmDeleteSession()" title="프로젝트 영구 삭제">
+    <i class="bi bi-trash"></i>
+  </button>
+{% endblock %}
+
+{% block content %}
+<div class="container-xl">
+  <form id="deleteSessionForm" method="POST"
+        action="{{ url_for('session.delete_session', session_id=session.id) }}"
+        style="display:none"></form>
+
+  {% if current_round %}
+
+  <!-- 파이프라인 진행 상태 -->
+  <div class="card mb-4 shadow-sm">
+    <div class="card-header card-header-active fw-semibold d-flex justify-content-between align-items-center" data-round-status="{{ current_round.status }}">
+      <span><i class="bi bi-activity me-2 text-primary"></i>라운드 {{ current_round.round_number }} — 파이프라인</span>
+      <span class="badge bg-primary">{{ current_round.status | replace('_',' ') }}</span>
+    </div>
+    <div class="card-body pb-2">
+      {% set statuses = ['prompt_built', 'generating', 'video_ready', 'uploaded', 'feedback_collected', 'feedback_classified', 'feedback_clustered', 'pending_review', 'prompt_updated'] %}
+      {% set labels = ['프롬프트', '생성 중', '영상 완성', '업로드', '피드백 수집', '분류', '클러스터링', '검토 대기', '반영 완료'] %}
+      {% set current_idx = statuses.index(current_round.status) if current_round.status in statuses else 0 %}
+      <div class="d-none d-sm-flex align-items-center overflow-auto pb-1 gap-0">
+        {% for status, label in zip(statuses, labels) %}
+          {% set i = loop.index0 %}
+          {% set is_done = i <= current_idx %}
+          {% set is_current = i == current_idx %}
+          <div class="text-center px-1" style="min-width:72px">
+            <div class="step-circle mx-auto mb-1 {{ 'step-circle-current' if is_current else ('step-circle-done' if is_done else 'step-circle-pending') }}"
+                 style="width:40px;height:40px;font-size:0.8rem">
+              {% if is_done %}
+                <i class="bi bi-check-lg"></i>
+              {% else %}
+                {{ i+1 }}
+              {% endif %}
+            </div>
+            <div class="step-label-full" style="font-size:0.65rem;{{ 'font-weight:700;color:var(--bs-primary)' if is_current else ('color:var(--bs-secondary)' if is_done else 'opacity:0.4') }}">{{ label }}</div>
+          </div>
+          {% if not loop.last %}
+          <div class="{{ 'text-primary' if i < current_idx else 'text-muted opacity-25' }}" style="font-size:0.75rem;flex-shrink:0">
+            <i class="bi bi-chevron-right"></i>
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <div class="d-sm-none">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <div class="step-circle step-circle-current" style="width:36px;height:36px;flex-shrink:0">{{ current_idx + 1 }}</div>
+          <div>
+            <div class="fw-semibold small">{{ labels[current_idx] if current_idx < labels|length else current_round.status }}</div>
+            <div class="text-muted" style="font-size:0.7rem">{{ current_idx + 1 }} / {{ statuses|length }} 단계</div>
+          </div>
+        </div>
+        <div class="pipeline-progress">
+          <div class="pipeline-progress-bar" style="width:{{ ((current_idx + 1) / statuses|length * 100)|round }}%"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 페이지 내비게이션 -->
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <a href="{{ url_for('session.detail', session_id=session.id) }}" class="btn btn-outline-secondary">
+      <i class="bi bi-chevron-left me-1"></i>이전: 영상 제작
+    </a>
+    {% if current_round.status in ['uploaded', 'feedback_collected', 'feedback_classified', 'feedback_clustered', 'pending_review', 'prompt_updated'] %}
+    <a href="{{ url_for('session.feedback_page', session_id=session.id) }}" class="btn btn-primary">
+      다음: 피드백 수집 <i class="bi bi-chevron-right ms-1"></i>
+    </a>
+    {% else %}
+    <button class="btn btn-outline-secondary" disabled title="YouTube URL 등록 후 이동 가능">
+      다음: 피드백 수집 <i class="bi bi-chevron-right ms-1"></i>
+    </button>
+    {% endif %}
+  </div>
+
+  <div class="row g-4">
+    <!-- 좌측: Step 4 -->
+    <div class="col-lg-7">
+
+      <!-- Step 4: YouTube 업로드 -->
+      <div class="card mb-3 shadow-sm {% if current_round.youtube_url %}border-success{% endif %}">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-youtube me-2 text-danger"></i>Step 4: YouTube 업로드</span>
+          {% if current_round.youtube_url %}<span class="badge bg-success">완료</span>{% endif %}
+        </div>
+        <div class="card-body">
+          {% if current_round.youtube_url %}
+          <div class="alert alert-success d-flex align-items-start gap-2 mb-3">
+            <i class="bi bi-check-circle-fill mt-1 flex-shrink-0"></i>
+            <div>
+              <div class="fw-semibold mb-1">등록된 URL</div>
+              <a href="{{ current_round.youtube_url }}" target="_blank" class="small">{{ current_round.youtube_url }}</a>
+            </div>
+          </div>
+          {% endif %}
+
+          <div class="alert alert-info py-2 mb-3 small">
+            <i class="bi bi-info-circle me-1"></i>
+            YouTube Studio에서 영상을 직접 업로드한 뒤 URL을 여기에 붙여넣으세요.
+            댓글이 충분히 쌓이면 다음 단계로 진행합니다.
+          </div>
+
+          {% if current_round.status == 'video_ready' or current_round.youtube_url %}
+          <form method="POST" action="{{ url_for('session.upload_video', session_id=session.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label class="form-label fw-semibold">
+              YouTube URL
+              <small class="text-muted fw-normal">(예: https://www.youtube.com/watch?v=...)</small>
+            </label>
+            <div class="input-group mb-3">
+              <span class="input-group-text"><i class="bi bi-youtube text-danger"></i></span>
+              <input type="text" name="youtube_url" class="form-control"
+                     placeholder="https://www.youtube.com/watch?v=..."
+                     value="{{ current_round.youtube_url or '' }}"
+                     required />
+              <button type="submit" class="btn btn-danger">
+                <i class="bi bi-cloud-upload me-1"></i>{% if current_round.youtube_url %}URL 업데이트{% else %}URL 등록{% endif %}
+              </button>
+            </div>
+          </form>
+          {% endif %}
+
+          <!-- YouTube 메타데이터 자동 생성 -->
+          <div class="border-top pt-3 mt-1">
+            <div class="fw-semibold small mb-2"><i class="bi bi-tags me-1 text-secondary"></i>YouTube 메타데이터 자동 생성</div>
+            <p class="text-muted small mb-2">AI가 영상 프롬프트를 분석해 최적화된 제목·설명·태그를 생성합니다.</p>
+            {% if current_round.youtube_metadata_json %}
+            <div class="alert alert-secondary py-2 small mb-2">
+              <i class="bi bi-check-circle me-1"></i><strong>메타데이터 생성됨</strong> — 아래 버튼으로 재생성하거나 확인하세요.
+            </div>
+            {% endif %}
+            <button type="button" class="btn btn-sm btn-outline-secondary w-100"
+                    onclick="loadMetadata()" data-bs-toggle="modal" data-bs-target="#metadataModal">
+              <i class="bi bi-tags me-1"></i>제목·설명·태그 자동 생성 (AI)
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 영상 미리보기 (참조용) -->
+      {% if current_round.video_file_path %}
+      {% set _vfp = current_round.video_file_path %}
+      {% set _vext = _vfp.split('.')[-1].lower() if '.' in _vfp else '' %}
+      <div class="card mb-3 shadow-sm">
+        <div class="card-header fw-semibold">
+          <i class="bi bi-film me-2 text-success"></i>생성된 영상 (참조용)
+        </div>
+        <div class="card-body p-2">
+          {% if _vext in ['mp4', 'mov', 'avi', 'mkv'] %}
+          <video controls class="w-100 rounded" style="max-height:260px;background:#000"
+                 src="{{ url_for('session.serve_video', session_id=session.id) }}">
+          </video>
+          {% else %}
+          <div class="alert alert-secondary py-2 mb-0 small">
+            <code>{{ _vfp }}</code> (mock 모드)
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+
+    <!-- 우측: 안내 + 썸네일 -->
+    <div class="col-lg-5">
+
+      <!-- 업로드 가이드 -->
+      <div class="card mb-3 shadow-sm border-info">
+        <div class="card-header fw-semibold text-info">
+          <i class="bi bi-question-circle me-1"></i>YouTube Studio 업로드 가이드
+        </div>
+        <div class="card-body small">
+          <ol class="mb-0 ps-3">
+            <li class="mb-2">
+              <a href="https://studio.youtube.com" target="_blank" class="text-info fw-semibold">YouTube Studio</a>에서
+              <strong>콘텐츠 → 업로드</strong>를 클릭합니다.
+            </li>
+            <li class="mb-2">영상 파일을 선택하고 제목·설명·태그를 입력합니다.<br>
+              <span class="text-muted">위 메타데이터 자동 생성 버튼을 활용하세요.</span>
+            </li>
+            <li class="mb-2">공개 범위를 설정하고 업로드를 완료합니다.</li>
+            <li class="mb-2">업로드된 영상 URL을 좌측 폼에 붙여넣고 <strong>URL 등록</strong>을 클릭합니다.</li>
+            <li>댓글이 충분히 쌓이면 <strong>다음 단계 →</strong> 버튼으로 피드백 수집을 시작합니다.</li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- 썸네일 (있을 때) -->
+      {% if thumbnails %}
+      <div class="card mb-3 shadow-sm">
+        <div class="card-header fw-semibold">
+          <i class="bi bi-images me-2 text-secondary"></i>추출된 썸네일
+          <span class="badge bg-success ms-1">{{ thumbnails|length }}장</span>
+        </div>
+        <div class="card-body">
+          <div class="row g-2">
+            {% for thumb in thumbnails %}
+            <div class="col-4">
+              <img src="{{ url_for('session.serve_thumbnail', session_id=session.id, filename=thumb.split('/')[-1].split('\\\\')[-1]) }}"
+                   class="img-fluid rounded border" alt="썸네일 {{ loop.index }}"
+                   style="object-fit:cover;height:80px;width:100%">
+            </div>
+            {% endfor %}
+          </div>
+          <small class="text-muted d-block mt-2">YouTube 썸네일로 사용할 이미지를 선택하세요.</small>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- 라운드 정보 -->
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">
+          <i class="bi bi-info-circle me-2"></i>현재 라운드 정보
+        </div>
+        <div class="card-body small">
+          <div class="d-flex justify-content-between mb-2">
+            <span class="text-muted">라운드</span>
+            <strong>{{ current_round.round_number }}</strong>
+          </div>
+          <div class="d-flex justify-content-between mb-2">
+            <span class="text-muted">상태</span>
+            <span class="badge bg-primary">{{ current_round.status | replace('_',' ') }}</span>
+          </div>
+          {% if current_round.generator_adapter %}
+          <div class="d-flex justify-content-between mb-2">
+            <span class="text-muted">영상 어댑터</span>
+            <span class="badge bg-secondary">{{ current_round.generator_adapter }}</span>
+          </div>
+          {% endif %}
+          {% if current_round.estimated_cost_usd %}
+          <div class="d-flex justify-content-between mb-2">
+            <span class="text-muted">예상 비용</span>
+            <span>${{ "%.4f"|format(current_round.estimated_cost_usd) }}</span>
+          </div>
+          {% endif %}
+          <div class="d-flex justify-content-between">
+            <span class="text-muted">생성일</span>
+            <span>{{ current_round.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 하단 내비게이션 -->
+  <div class="d-flex justify-content-between align-items-center mt-4 pt-3 border-top">
+    <a href="{{ url_for('session.detail', session_id=session.id) }}" class="btn btn-outline-secondary">
+      <i class="bi bi-chevron-left me-1"></i>이전: 영상 제작
+    </a>
+    {% if current_round.status in ['uploaded', 'feedback_collected', 'feedback_classified', 'feedback_clustered', 'pending_review', 'prompt_updated'] %}
+    <a href="{{ url_for('session.feedback_page', session_id=session.id) }}" class="btn btn-primary">
+      다음: 피드백 수집 <i class="bi bi-chevron-right ms-1"></i>
+    </a>
+    {% else %}
+    <span class="text-muted small"><i class="bi bi-info-circle me-1"></i>YouTube URL 등록 후 다음 단계로 이동합니다.</span>
+    {% endif %}
+  </div>
+
+  {% else %}
+  <div class="alert alert-warning">이 세션에 아직 라운드가 없습니다.</div>
+  {% endif %}
+</div>
+
+<!-- YouTube 메타데이터 모달 -->
+<div class="modal fade" id="metadataModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-tags me-2 text-danger"></i>YouTube 메타데이터 생성</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="metadataModalBody">
+        <div class="text-center py-4">
+          <span class="spinner-border text-danger me-2"></span>Gemini가 최적화된 메타데이터를 생성 중...
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function confirmDeleteSession() {
+  if (confirm('이 프로젝트와 모든 관련 데이터(영상·피드백·클러스터)를 영구 삭제합니다.\n되돌릴 수 없습니다. 계속하시겠습니까?')) {
+    document.getElementById('deleteSessionForm').submit();
+  }
+}
+
+async function loadMetadata() {
+  const body = document.getElementById('metadataModalBody');
+  body.innerHTML = '<div class="text-center py-4"><span class="spinner-border text-danger me-2"></span>Gemini가 최적화된 메타데이터를 생성 중...</div>';
+  try {
+    const res = await fetch('{{ url_for("session.api_generate_metadata", session_id=session.id) }}', { method: 'POST' });
+    const d = await res.json();
+    const frag = document.createDocumentFragment();
+
+    function _inputGroup(labelText, tag, id, value, rows) {
+      const wrap = document.createElement('div'); wrap.className = 'mb-3';
+      const lbl = document.createElement('label'); lbl.className = 'form-label fw-semibold small'; lbl.textContent = labelText;
+      wrap.appendChild(lbl);
+      const ig = document.createElement('div'); ig.className = 'input-group';
+      let el;
+      if (tag === 'textarea') { el = document.createElement('textarea'); el.className = 'form-control small'; el.rows = rows || 4; el.readOnly = true; el.textContent = value; }
+      else { el = document.createElement('input'); el.type = 'text'; el.className = 'form-control'; el.readOnly = true; el.value = value; }
+      el.id = id;
+      const btn = document.createElement('button'); btn.className = 'btn btn-outline-secondary btn-sm'; btn.type = 'button';
+      btn.onclick = () => copyField(id);
+      const ico = document.createElement('i'); ico.className = 'bi bi-clipboard'; btn.appendChild(ico);
+      ig.appendChild(el); ig.appendChild(btn); wrap.appendChild(ig);
+      return wrap;
+    }
+
+    if (d.title) frag.appendChild(_inputGroup('제목', 'input', 'metaTitle', d.title));
+    if (d.description) frag.appendChild(_inputGroup('설명', 'textarea', 'metaDesc', d.description));
+    if (d.tags && d.tags.length) {
+      const wrap = document.createElement('div'); wrap.className = 'mb-2';
+      const lbl = document.createElement('label'); lbl.className = 'form-label fw-semibold small'; lbl.textContent = '태그';
+      wrap.appendChild(lbl);
+      const tagWrap = document.createElement('div'); tagWrap.className = 'd-flex flex-wrap gap-1';
+      d.tags.forEach(t => { const b = document.createElement('span'); b.className = 'badge bg-light text-dark border'; b.textContent = t; tagWrap.appendChild(b); });
+      wrap.appendChild(tagWrap);
+      const hidden = document.createElement('input'); hidden.type = 'hidden'; hidden.id = 'metaTags'; hidden.value = d.tags.join(', ');
+      wrap.appendChild(hidden);
+      const copyBtn = document.createElement('button'); copyBtn.className = 'btn btn-sm btn-outline-secondary w-100 mt-1'; copyBtn.type = 'button';
+      copyBtn.onclick = () => copyField('metaTags');
+      copyBtn.innerHTML = '<i class="bi bi-clipboard me-1"></i>태그 전체 복사';
+      wrap.appendChild(copyBtn);
+      frag.appendChild(wrap);
+    }
+    body.innerHTML = '';
+    if (frag.childNodes.length) { body.appendChild(frag); }
+    else { const p = document.createElement('p'); p.className = 'text-muted'; p.textContent = '메타데이터를 생성할 수 없습니다.'; body.appendChild(p); }
+  } catch (e) {
+    const div = document.createElement('div'); div.className = 'alert alert-danger'; div.textContent = '생성 실패: ' + e.message; body.innerHTML = ''; body.appendChild(div);
+  }
+}
+
+function copyField(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const text = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ? el.value : el.innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = el.nextElementSibling || el.parentElement.querySelector('button');
+    if (btn) { btn.innerHTML = '<i class="bi bi-check-lg"></i>'; setTimeout(() => btn.innerHTML = '<i class="bi bi-clipboard"></i>', 1500); }
+  });
+}
+</script>
+{% endblock %}

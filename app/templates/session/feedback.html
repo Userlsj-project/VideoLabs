@@ -1,0 +1,484 @@
+{% extends "base.html" %}
+{% block title %}피드백 수집 — {{ session.title }}{% endblock %}
+
+{% block page_title %}
+  {{ session.title }}
+  <span class="badge bg-secondary ms-2" style="font-size:11px;font-weight:500">{{ session.genre }}</span>
+{% endblock %}
+
+{% block topbar_actions %}
+  <a href="{{ url_for('session.systemic_issues', session_id=session.id) }}"
+     class="btn btn-sm btn-ghost" title="반복 이슈">
+    <i class="bi bi-diagram-3 me-1"></i><span class="d-none d-md-inline">반복이슈</span>
+  </a>
+  <a href="{{ url_for('session.character_profiles', session_id=session.id) }}"
+     class="btn btn-sm btn-ghost" title="캐릭터 프로파일">
+    <i class="bi bi-person-circle me-1"></i><span class="d-none d-md-inline">캐릭터</span>
+  </a>
+  <a href="{{ url_for('session.version_history', session_id=session.id) }}"
+     class="btn btn-sm btn-ghost" title="프롬프트 버전 이력">
+    <i class="bi bi-clock-history me-1"></i><span class="d-none d-md-inline">버전 이력</span>
+  </a>
+  <a href="{{ url_for('session.report', session_id=session.id) }}"
+     class="btn btn-sm btn-accent">
+    <i class="bi bi-bar-chart-line me-1"></i><span class="d-none d-md-inline">리포트</span>
+  </a>
+  <button type="button" class="btn btn-sm btn-ghost btn-danger-ghost"
+          onclick="confirmDeleteSession()" title="프로젝트 영구 삭제">
+    <i class="bi bi-trash"></i>
+  </button>
+{% endblock %}
+
+{% block content %}
+<div class="container-xl">
+  <form id="deleteSessionForm" method="POST"
+        action="{{ url_for('session.delete_session', session_id=session.id) }}"
+        style="display:none"></form>
+
+  {% if current_round %}
+
+  <!-- 파이프라인 진행 상태 -->
+  <div class="card mb-4 shadow-sm">
+    <div class="card-header card-header-active fw-semibold d-flex justify-content-between align-items-center" data-round-status="{{ current_round.status }}">
+      <span><i class="bi bi-activity me-2 text-primary"></i>라운드 {{ current_round.round_number }} — 파이프라인</span>
+      <span class="badge bg-primary">{{ current_round.status | replace('_',' ') }}</span>
+    </div>
+    <div class="card-body pb-2">
+      {% set statuses = ['prompt_built', 'generating', 'video_ready', 'uploaded', 'feedback_collected', 'feedback_classified', 'feedback_clustered', 'pending_review', 'prompt_updated'] %}
+      {% set labels = ['프롬프트', '생성 중', '영상 완성', '업로드', '피드백 수집', '분류', '클러스터링', '검토 대기', '반영 완료'] %}
+      {% set current_idx = statuses.index(current_round.status) if current_round.status in statuses else 0 %}
+      <div class="d-none d-sm-flex align-items-center overflow-auto pb-1 gap-0">
+        {% for status, label in zip(statuses, labels) %}
+          {% set i = loop.index0 %}
+          {% set is_done = i <= current_idx %}
+          {% set is_current = i == current_idx %}
+          <div class="text-center px-1" style="min-width:72px">
+            <div class="step-circle mx-auto mb-1 {{ 'step-circle-current' if is_current else ('step-circle-done' if is_done else 'step-circle-pending') }}"
+                 style="width:40px;height:40px;font-size:0.8rem">
+              {% if is_done %}
+                <i class="bi bi-check-lg"></i>
+              {% else %}
+                {{ i+1 }}
+              {% endif %}
+            </div>
+            <div class="step-label-full" style="font-size:0.65rem;{{ 'font-weight:700;color:var(--bs-primary)' if is_current else ('color:var(--bs-secondary)' if is_done else 'opacity:0.4') }}">{{ label }}</div>
+          </div>
+          {% if not loop.last %}
+          <div class="{{ 'text-primary' if i < current_idx else 'text-muted opacity-25' }}" style="font-size:0.75rem;flex-shrink:0">
+            <i class="bi bi-chevron-right"></i>
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <div class="d-sm-none">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <div class="step-circle step-circle-current" style="width:36px;height:36px;flex-shrink:0">{{ current_idx + 1 }}</div>
+          <div>
+            <div class="fw-semibold small">{{ labels[current_idx] if current_idx < labels|length else current_round.status }}</div>
+            <div class="text-muted" style="font-size:0.7rem">{{ current_idx + 1 }} / {{ statuses|length }} 단계</div>
+          </div>
+        </div>
+        <div class="pipeline-progress">
+          <div class="pipeline-progress-bar" style="width:{{ ((current_idx + 1) / statuses|length * 100)|round }}%"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 페이지 내비게이션 -->
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <a href="{{ url_for('session.publish', session_id=session.id) }}" class="btn btn-outline-secondary">
+      <i class="bi bi-chevron-left me-1"></i>이전: YouTube 업로드
+    </a>
+    {% if current_round.status == 'prompt_updated' %}
+    <a href="{{ url_for('session.detail', session_id=session.id) }}?prompt_ready=1" class="btn btn-success">
+      <i class="bi bi-camera-video me-1"></i>다음 라운드 영상 생성 →
+    </a>
+    {% endif %}
+  </div>
+
+  <div class="row g-4">
+    <!-- 좌측: 피드백 파이프라인 -->
+    <div class="col-lg-7">
+
+      <!-- Step 5: 피드백 수집 -->
+      {% if current_round.status in ['uploaded', 'feedback_collected', 'feedback_classified', 'feedback_clustered', 'pending_review', 'prompt_updated'] %}
+      <div class="card mb-3 shadow-sm">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-chat-left-text me-2 text-warning"></i>Step 5: 피드백 수집</span>
+          <div class="d-flex gap-1 align-items-center">
+            {% if simulation_mode %}
+            <span class="badge bg-warning text-dark" title="SIMULATION_MODE=true — AI 생성 댓글 사용">
+              <i class="bi bi-robot me-1"></i>시뮬레이션
+            </span>
+            {% else %}
+            <span class="badge bg-success" title="SIMULATION_MODE=false — 실제 YouTube API 사용">
+              <i class="bi bi-youtube me-1"></i>YouTube 실제
+            </span>
+            {% endif %}
+            <span class="badge bg-secondary">{{ current_round.feedbacks|length }}개</span>
+          </div>
+        </div>
+        <div class="card-body">
+          <form method="POST" action="{{ url_for('session.collect_feedback', session_id=session.id) }}" class="mb-3">
+            <button type="submit" class="btn {% if current_round.feedbacks|length > 0 %}btn-outline-warning{% else %}btn-warning{% endif %} text-dark w-100">
+              <i class="bi bi-cloud-download me-2"></i>
+              {% if current_round.feedbacks|length > 0 %}
+                댓글 다시 수집
+              {% elif simulation_mode %}
+                댓글 수집
+              {% else %}
+                YouTube 댓글 수집
+              {% endif %}
+            </button>
+          </form>
+
+          <!-- 테스트 피드백 추가 -->
+          <details>
+            <summary class="text-primary fw-semibold small mb-2" style="cursor:pointer">
+              <i class="bi bi-plus-circle me-1"></i>팀 테스트 피드백 직접 추가 (반영률 측정용)
+            </summary>
+            <form method="POST" action="{{ url_for('session.add_bulk_feedback', session_id=session.id) }}" class="mt-2" id="bulkFeedbackForm">
+              <div id="feedbackRows">
+                <div class="d-flex gap-2 mb-2 feedback-row">
+                  <input type="text" name="comment_text" class="form-control form-control-sm"
+                         placeholder="예: 배경음악이 너무 커서 목소리가 안 들려요." />
+                  <button type="button" class="btn btn-sm btn-outline-danger text-nowrap remove-row">삭제</button>
+                </div>
+              </div>
+              <div class="d-flex gap-2 mt-1">
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="addFeedbackRow">
+                  <i class="bi bi-plus"></i> 행 추가
+                </button>
+                <button type="submit" class="btn btn-sm btn-outline-primary">일괄 추가</button>
+              </div>
+            </form>
+          </details>
+
+          <!-- 피드백 목록 -->
+          {% if current_round.feedbacks %}
+          <div class="mt-3">
+            <div class="d-flex justify-content-between mb-1">
+              <small class="fw-semibold text-muted">수집된 댓글 ({{ current_round.feedbacks|length }})</small>
+              <button class="btn p-0 small text-primary" type="button" data-bs-toggle="collapse" data-bs-target="#feedbackList">접기/펼치기</button>
+            </div>
+            <div class="collapse show" id="feedbackList" style="max-height:300px;overflow-y:auto">
+              {% for fb in current_round.feedbacks %}
+              <div class="border rounded p-2 mb-1 {% if fb.category == 'constructive' %}border-success bg-success bg-opacity-10{% elif fb.category == 'spam' %}border-warning bg-warning bg-opacity-10{% elif fb.category == 'inappropriate' %}border-danger bg-danger bg-opacity-10{% endif %}">
+                <div class="d-flex justify-content-between align-items-start flex-wrap gap-1">
+                  <div class="small">
+                    <span class="fw-semibold text-muted">{{ fb.author_name or '익명' }}</span>
+                    <span class="badge ms-1 bg-light text-dark border" style="font-size:0.65rem">{{ fb.source }}</span>
+                    {% if fb.category %}
+                      <span class="badge ms-1" style="font-size:0.65rem;{{ 'background:#198754' if fb.category=='constructive' else ('background:#ffc107;color:#000' if fb.category=='spam' else ('background:#dc3545' if fb.category=='inappropriate' else 'background:#6c757d')) }}">{{ fb.category }}</span>
+                    {% endif %}
+                  </div>
+                  {% if fb.is_reflected %}
+                  <span class="badge bg-success" style="font-size:0.65rem"><i class="bi bi-check2"></i> 반영됨</span>
+                  {% endif %}
+                </div>
+                <p class="mb-0 mt-1 small">{{ fb.comment_text }}</p>
+                {% if fb.improvement_suggestion and fb.improvement_suggestion != fb.comment_text %}
+                <p class="mb-0 mt-1 small text-success"><i class="bi bi-arrow-right me-1"></i>{{ fb.improvement_suggestion }}</p>
+                {% endif %}
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Step 6-7-8 파이프라인 버튼 -->
+      {% if current_round.feedbacks|length > 0 and current_round.status in ['feedback_collected', 'feedback_classified', 'feedback_clustered', 'pending_review'] %}
+      <div class="card mb-3 shadow-sm">
+        <div class="card-header fw-semibold"><i class="bi bi-gear me-2"></i>자동화 파이프라인 실행</div>
+        <div class="card-body d-flex flex-column gap-2">
+          {% if current_round.status == 'feedback_collected' %}
+          <form method="POST" action="{{ url_for('session.filter_feedback', session_id=session.id) }}">
+            <button type="submit" class="btn btn-secondary w-100">
+              <i class="bi bi-funnel me-2"></i>Step 6: 피드백 분류 (건설적 / 스팸 / 기타)
+            </button>
+          </form>
+          <small class="text-muted"><i class="bi bi-info-circle me-1"></i>다국어 NLI 모델로 구체성·타당성 2축 판단</small>
+          {% endif %}
+
+          {% if current_round.status == 'feedback_classified' %}
+          <form method="POST" action="{{ url_for('session.cluster_feedback', session_id=session.id) }}">
+            <button type="submit" class="btn btn-dark w-100">
+              <i class="bi bi-diagram-3 me-2"></i>Step 7: 피드백 클러스터링 (2단계 임베딩 군집화)
+            </button>
+          </form>
+          <small class="text-muted"><i class="bi bi-info-circle me-1"></i>주제 태깅 → 계층적 군집화 → 우선순위 산정</small>
+          {% endif %}
+
+          {% if current_round.status in ['feedback_clustered', 'pending_review'] %}
+          <a href="{{ url_for('session.review_clusters', session_id=session.id) }}"
+             class="btn btn-primary w-100 position-relative">
+            <i class="bi bi-check2-square me-2"></i>Step 8: 클러스터 검토 및 승인
+            {% if pending_cluster_count > 0 %}
+            <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
+              {{ pending_cluster_count }}
+            </span>
+            {% endif %}
+          </a>
+          <small class="text-muted"><i class="bi bi-info-circle me-1"></i>각 클러스터를 확인하고 반영 여부를 선택합니다</small>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- 업로드 상태 안내 (uploaded 전) -->
+      {% if current_round.status == 'video_ready' %}
+      <div class="alert alert-warning">
+        <i class="bi bi-exclamation-triangle me-2"></i>
+        먼저 <a href="{{ url_for('session.publish', session_id=session.id) }}" class="alert-link">YouTube 업로드 페이지</a>에서
+        영상 URL을 등록하세요.
+      </div>
+      {% endif %}
+
+    </div>
+
+    <!-- 우측: 피드백 통계 & 히스토리 -->
+    <div class="col-lg-5">
+      <!-- 피드백 통계 -->
+      {% set total_fb = current_round.feedbacks|length %}
+      {% if total_fb > 0 %}
+      {% set constructive_fb = current_round.feedbacks|selectattr('category','equalto','constructive')|list %}
+      {% set spam_fb = current_round.feedbacks|selectattr('category','equalto','spam')|list %}
+      {% set inappropriate_fb = current_round.feedbacks|selectattr('category','equalto','inappropriate')|list %}
+      {% set non_c_fb = current_round.feedbacks|selectattr('category','equalto','non_constructive')|list %}
+      {% set reflected_fb = current_round.feedbacks|selectattr('is_reflected')|list %}
+      <div class="card mb-3 shadow-sm">
+        <div class="card-header fw-semibold"><i class="bi bi-pie-chart me-2 text-primary"></i>피드백 분류 현황</div>
+        <div class="card-body">
+          <canvas id="feedbackChart" height="180"></canvas>
+          <div id="chartData"
+               data-c="{{ constructive_fb|length }}"
+               data-nc="{{ non_c_fb|length }}"
+               data-s="{{ spam_fb|length }}"
+               data-i="{{ inappropriate_fb|length }}"
+               style="display:none"></div>
+
+          <div class="row g-2 mt-2 text-center">
+            <div class="col-6">
+              <div class="p-2 rounded" style="background:var(--diff-new-bg)">
+                <div class="fw-bold fs-5 text-success">{{ constructive_fb|length }}</div>
+                <div class="small text-muted">건설적 피드백</div>
+              </div>
+            </div>
+            <div class="col-6">
+              <div class="p-2 rounded" style="background:var(--accent-soft)">
+                <div class="fw-bold fs-5" style="color:var(--accent-hover)">{{ reflected_fb|length }}</div>
+                <div class="small text-muted">반영 완료</div>
+              </div>
+            </div>
+          </div>
+
+          {% if constructive_fb|length > 0 %}
+          <div class="mt-3">
+            <div class="d-flex justify-content-between small mb-1">
+              <span class="fw-semibold">반영률 (핵심 지표)</span>
+              <span class="fw-bold text-primary">{{ '%.1f'|format(reflected_fb|length / constructive_fb|length * 100) }}%</span>
+            </div>
+            <div class="progress" style="height:14px">
+              <div class="progress-bar bg-primary" style="width:{{ (reflected_fb|length / constructive_fb|length * 100)|round }}%">
+                {{ '%.0f'|format(reflected_fb|length / constructive_fb|length * 100) }}%
+              </div>
+            </div>
+            <small class="text-muted">{{ reflected_fb|length }} / {{ constructive_fb|length }} 건설적 피드백 반영</small>
+          </div>
+          {% endif %}
+
+          <!-- 클러스터 현황 -->
+          {% set cluster_results = current_round.cluster_results %}
+          {% if cluster_results %}
+          <div class="mt-3">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div class="small fw-semibold text-muted"><i class="bi bi-diagram-3 me-1"></i>피드백 클러스터</div>
+              {% if pending_cluster_count > 0 %}
+              <a href="{{ url_for('session.review_clusters', session_id=session.id) }}" class="badge bg-warning text-dark text-decoration-none">
+                {{ pending_cluster_count }}개 검토 대기
+              </a>
+              {% endif %}
+            </div>
+            {% for cr in cluster_results|sort(attribute='priority_score', reverse=True) %}
+              <div class="d-flex justify-content-between align-items-center mb-1 gap-2">
+                <span class="small text-truncate">{{ cr.label }}</span>
+                <div class="d-flex gap-1 flex-shrink-0">
+                  <span class="badge bg-secondary rounded-pill">{{ cr.count }}</span>
+                  <span class="badge {% if cr.status == 'approved' %}bg-success{% elif cr.status == 'rejected' %}bg-danger{% elif cr.status == 'deferred' %}bg-warning text-dark{% else %}bg-light text-dark border{% endif %}" style="font-size:0.6rem">{{ cr.status }}</span>
+                </div>
+              </div>
+              <div class="progress mb-2" style="height:5px">
+                <div class="progress-bar {% if cr.scope == 'technical' %}bg-warning{% endif %}" style="width:{{ ((cr.priority_score or 0) * 100)|round }}%"></div>
+              </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- 시청자 DNA 미리보기 -->
+      {% set _has_clusters = namespace(v=false) %}
+      {% for r in all_rounds %}{% if r.cluster_results %}{% set _has_clusters.v = true %}{% endif %}{% endfor %}
+      {% if _has_clusters.v %}
+      <div class="card mb-3 shadow-sm border-info">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-people me-2 text-info"></i>시청자 DNA</span>
+          <a href="{{ url_for('session.channel_profile', session_id=session.id) }}" class="btn btn-sm btn-outline-info">전체 보기</a>
+        </div>
+        <div class="card-body py-2">
+          {% set cat_counts = {} %}
+          {% for r in all_rounds %}
+            {% for cr in r.cluster_results %}
+              {% set cat = cr.topic_category or 'other' %}
+              {% if cat in cat_counts %}
+                {% set _ = cat_counts.update({cat: cat_counts[cat] + (cr.count or 0)}) %}
+              {% else %}
+                {% set _ = cat_counts.update({cat: cr.count or 0}) %}
+              {% endif %}
+            {% endfor %}
+          {% endfor %}
+          {% for cat, cnt in cat_counts.items()|sort(attribute='1', reverse=true) %}
+          {% if loop.index <= 5 %}
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <span class="small text-truncate me-2">{{ cat }}</span>
+            <span class="badge bg-secondary rounded-pill">{{ cnt }}</span>
+          </div>
+          {% endif %}
+          {% endfor %}
+          <a href="{{ url_for('session.channel_profile', session_id=session.id) }}" class="btn btn-sm btn-outline-info w-100 mt-1">
+            <i class="bi bi-graph-up me-1"></i>재발 이슈·카테고리 분석 보기
+          </a>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- 라운드 히스토리 -->
+      {% if all_rounds|length > 1 %}
+      <div class="card mb-3 shadow-sm">
+        <div class="card-header fw-semibold"><i class="bi bi-clock-history me-2"></i>라운드 히스토리</div>
+        <div class="list-group list-group-flush">
+          {% for r in all_rounds|reverse %}
+          <div class="list-group-item {% if r.id == current_round.id %}list-group-item-primary{% endif %}">
+            <div class="d-flex justify-content-between">
+              <span class="fw-semibold small">라운드 {{ r.round_number }}</span>
+              <span class="badge bg-light text-dark border" style="font-size:0.65rem">{{ r.status|replace('_',' ') }}</span>
+            </div>
+            <div class="text-muted" style="font-size:0.72rem">{{ r.created_at.strftime('%m-%d %H:%M') }}</div>
+            {% set rc = r.feedbacks|selectattr('category','equalto','constructive')|list|length %}
+            {% set rref = r.feedbacks|selectattr('is_reflected')|list|length %}
+            {% if rc > 0 %}
+            <div class="small mt-1">반영률: <strong>{{ '%.0f'|format(rref/rc*100) }}%</strong> ({{ rref }}/{{ rc }})</div>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- 프롬프트 변경 이력 -->
+      {% if prompt_changes %}
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold"><i class="bi bi-git me-2"></i>프롬프트 변경 이력</div>
+        <div class="card-body p-0">
+          {% for pc in prompt_changes %}
+          <div class="p-3 border-bottom">
+            <div class="small text-muted mb-1">
+              R{{ pc.from_round.round_number }} → R{{ pc.to_round.round_number if pc.to_round else '?' }}
+              · {{ pc.created_at.strftime('%m-%d %H:%M') }}
+            </div>
+            <p class="small mb-1">{{ pc.change_summary }}</p>
+            <button class="btn p-0 small text-primary" type="button" data-bs-toggle="collapse" data-bs-target="#diff-{{ pc.id }}">
+              프롬프트 비교 보기
+            </button>
+            <div class="collapse mt-2" id="diff-{{ pc.id }}">
+              <div class="mb-1">
+                <small class="text-muted fw-semibold">이전:</small>
+                <pre class="p-2 rounded small" style="background:var(--diff-old-bg);white-space:pre-wrap;font-size:0.72rem">{{ pc.original_prompt[:400] }}</pre>
+              </div>
+              <div>
+                <small class="text-success fw-semibold">업데이트:</small>
+                <pre class="p-2 rounded small" style="background:var(--diff-new-bg);white-space:pre-wrap;font-size:0.72rem">{{ pc.updated_prompt[:400] }}</pre>
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- 하단 내비게이션 -->
+  <div class="d-flex justify-content-between align-items-center mt-4 pt-3 border-top">
+    <a href="{{ url_for('session.publish', session_id=session.id) }}" class="btn btn-outline-secondary">
+      <i class="bi bi-chevron-left me-1"></i>이전: YouTube 업로드
+    </a>
+    {% if current_round.status == 'prompt_updated' %}
+    <a href="{{ url_for('session.detail', session_id=session.id) }}?prompt_ready=1" class="btn btn-success">
+      <i class="bi bi-camera-video me-1"></i>다음 라운드 영상 생성 →
+    </a>
+    {% endif %}
+  </div>
+
+  {% else %}
+  <div class="alert alert-warning">이 세션에 아직 라운드가 없습니다.</div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const el = document.getElementById('chartData');
+  if (!el) return;
+  const ctx = document.getElementById('feedbackChart');
+  if (!ctx) return;
+  new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: ['건설적', '비건설적', '스팸', '부적절'],
+      datasets: [{
+        data: [
+          parseInt(el.dataset.c),
+          parseInt(el.dataset.nc),
+          parseInt(el.dataset.s),
+          parseInt(el.dataset.i),
+        ],
+        backgroundColor: ['#198754','#6c757d','#ffc107','#dc3545'],
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+      cutout: '60%',
+    }
+  });
+});
+
+document.getElementById('addFeedbackRow')?.addEventListener('click', function() {
+  const row = document.createElement('div');
+  row.className = 'd-flex gap-2 mb-2 feedback-row';
+  row.innerHTML = '<input type="text" name="comment_text" class="form-control form-control-sm" placeholder="댓글 내용 입력" />'
+                + '<button type="button" class="btn btn-sm btn-outline-danger text-nowrap remove-row">삭제</button>';
+  document.getElementById('feedbackRows').appendChild(row);
+});
+document.getElementById('feedbackRows')?.addEventListener('click', function(e) {
+  if (e.target.classList.contains('remove-row')) {
+    const rows = document.querySelectorAll('.feedback-row');
+    if (rows.length > 1) e.target.closest('.feedback-row').remove();
+  }
+});
+
+function confirmDeleteSession() {
+  if (confirm('이 프로젝트와 모든 관련 데이터(영상·피드백·클러스터)를 영구 삭제합니다.\n되돌릴 수 없습니다. 계속하시겠습니까?')) {
+    document.getElementById('deleteSessionForm').submit();
+  }
+}
+</script>
+{% endblock %}

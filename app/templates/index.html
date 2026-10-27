@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}대시보드 — AI 영상 피드백 시스템{% endblock %}
+{% block page_title %}대시보드{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('session.new_session') }}" class="btn btn-sm btn-accent">
+  <i class="bi bi-plus me-1"></i>새 프로젝트
+</a>
+{% endblock %}
+
+{% block content %}
+
+<!-- 히어로 헤더 -->
+<div class="dash-hero mb-5">
+  <div class="dash-hero-text">
+    <h1 class="dash-hero-title">AI 영상 피드백<br>자동 개선 파이프라인</h1>
+    <p class="dash-hero-sub">시청자 댓글을 자동으로 분석·군집화하고, 다음 영상 프롬프트에 반영합니다.</p>
+  </div>
+  {% if not sessions %}
+  <a href="{{ url_for('session.new_session') }}" class="btn btn-accent btn-lg">
+    <i class="bi bi-plus-circle me-2"></i>첫 프로젝트 시작
+  </a>
+  {% endif %}
+</div>
+
+<!-- 파이프라인 스텝 -->
+<div class="pipeline-steps mb-5">
+  {% set steps = [
+    ("bi-input-cursor-text", "입력",        "대본·장르"),
+    ("bi-magic",             "프롬프트",    "AI 최적화"),
+    ("bi-camera-video",      "영상 생성",   "Kling / Mock"),
+    ("bi-youtube",           "업로드",      "YouTube"),
+    ("bi-chat-left-text",    "피드백 수집", "댓글"),
+    ("bi-funnel",            "분류",        "건설적 필터"),
+    ("bi-diagram-3",         "클러스터링",  "임베딩"),
+    ("bi-arrow-repeat",      "반영",        "자동 개선"),
+  ] %}
+  {% for icon, name, sub in steps %}
+  <div class="pipeline-step">
+    <div class="pipeline-step-icon"><i class="bi {{ icon }}"></i></div>
+    <div class="pipeline-step-label">{{ name }}</div>
+    <div class="pipeline-step-sub">{{ sub }}</div>
+    {% if not loop.last %}<div class="pipeline-step-arrow"><i class="bi bi-chevron-right"></i></div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<!-- 세션 목록 -->
+{% if sessions %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h2 class="section-title mb-0">
+    <i class="bi bi-folder2-open me-2"></i>프로젝트
+    <span class="badge-count">{{ sessions|length }}</span>
+  </h2>
+  <a href="{{ url_for('session.new_session') }}" class="btn btn-sm btn-outline-accent">
+    <i class="bi bi-plus me-1"></i>추가
+  </a>
+</div>
+
+<div class="row g-3">
+  {% for sess in sessions %}
+  <div class="col-md-6 col-xl-4">
+    <div class="project-card">
+      <div class="project-card-header">
+        <span class="genre-badge">{{ sess.genre }}</span>
+        <span class="project-date">{{ sess.created_at.strftime('%m/%d') }}</span>
+      </div>
+      <div class="project-card-body">
+        <h3 class="project-title">{{ sess.title }}</h3>
+        <p class="project-script">{{ sess.user_script[:90] }}{% if sess.user_script|length > 90 %}…{% endif %}</p>
+
+        <div class="project-meta">
+          <span class="meta-chip"><i class="bi bi-layers me-1"></i>{{ sess.rounds|length }}라운드</span>
+          {% if sess.rounds %}
+            {% set last = sess.rounds[-1] %}
+            {% set all_statuses = ['prompt_built','generating','video_ready','uploaded','feedback_collected','feedback_classified','feedback_clustered','pending_review','prompt_updated'] %}
+            {% set sidx = all_statuses.index(last.status) + 1 if last.status in all_statuses else 1 %}
+            <span class="status-pill status-{{ last.status }}">{{ last.status|replace('_',' ') }}</span>
+          {% endif %}
+        </div>
+
+        {% if sess.rounds %}
+          {% set last = sess.rounds[-1] %}
+          {% set all_statuses = ['prompt_built','generating','video_ready','uploaded','feedback_collected','feedback_classified','feedback_clustered','pending_review','prompt_updated'] %}
+          {% set sidx = all_statuses.index(last.status) + 1 if last.status in all_statuses else 1 %}
+          <div class="project-progress">
+            <div class="project-progress-bar" style="width:{{ (sidx / all_statuses|length * 100)|round }}%"></div>
+          </div>
+        {% endif %}
+      </div>
+      <div class="project-card-footer">
+        <a href="{{ url_for('session.detail', session_id=sess.id) }}" class="btn btn-sm btn-accent flex-grow-1">
+          <i class="bi bi-play-circle me-1"></i>열기
+        </a>
+        <a href="{{ url_for('session.report', session_id=sess.id) }}" class="btn btn-sm btn-ghost" title="리포트">
+          <i class="bi bi-bar-chart-line"></i>
+        </a>
+        <form method="POST" action="{{ url_for('session.delete_session', session_id=sess.id) }}"
+              onsubmit="return confirm('\'{{ sess.title }}\' 프로젝트를 삭제하시겠습니까?')">
+          <button type="submit" class="btn btn-sm btn-ghost btn-danger-ghost" title="삭제">
+            <i class="bi bi-trash"></i>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="empty-state">
+  <div class="empty-icon"><i class="bi bi-film"></i></div>
+  <h3 class="empty-title">프로젝트가 없습니다</h3>
+  <p class="empty-sub">새 프로젝트를 만들어 AI 영상 파이프라인을 시작하세요.</p>
+  <a href="{{ url_for('session.new_session') }}" class="btn btn-accent">
+    <i class="bi bi-plus-circle me-2"></i>첫 프로젝트 만들기
+  </a>
+</div>
+{% endif %}
+
+{% endblock %}
