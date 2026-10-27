@@ -33,23 +33,18 @@
 
 ## 2. 전체 파이프라인
 
+**① 영상 제작**
+
 ```mermaid
 flowchart LR
-    U([👤 사용자\n대본 입력]) --> F[Flask 서버\nsession.py]
+    U([👤 사용자\n대본 입력]) --> F[Flask 서버]
     F --> LLM[🤖 Gemini LLM\n프롬프트 생성]
-    LLM --> K[🎥 Kling V3\n영상 생성\n22초]
-    LLM --> TTS[🔊 ElevenLabs\n나레이션 + BGM]
+    LLM --> K[🎥 Kling V3\n22초]
+    LLM --> TTS[🔊 ElevenLabs\n나레이션+BGM]
     K --> MX[⚙️ ffmpeg\n합성]
     TTS --> MX
-    MX --> OUT[🎬 영상 후처리\n로고 아웃트로 6초]
-    OUT --> YT[▶️ YouTube\n업로드]
-
-    YT --> COL[💬 댓글 수집\nData API v3]
-    COL --> FIL[🔍 피드백 필터\n건설성 분류]
-    FIL --> CLS[📊 6축 분류기\n임베딩 모델]
-    CLS --> CLU[🗂️ 클러스터링\nHDBSCAN]
-    CLU --> APR[✅ 인간 검토\n승인 / 거절]
-    APR -->|개선된 프롬프트| LLM
+    MX --> OUT[🎬 후처리\n로고 아웃트로]
+    OUT --> YT[▶️ YouTube]
 
     style U fill:#7c6cf5,color:#fff
     style LLM fill:#a855f7,color:#fff
@@ -58,12 +53,27 @@ flowchart LR
     style MX fill:#14b8a6,color:#fff
     style OUT fill:#14b8a6,color:#fff
     style YT fill:#ef4444,color:#fff
+    style F fill:#3b82f6,color:#fff
+```
+
+**② 피드백 분석 루프**
+
+```mermaid
+flowchart LR
+    YT[▶️ YouTube] --> COL[💬 댓글 수집\nData API v3]
+    COL --> FIL[🔍 피드백 필터\n건설성 분류]
+    FIL --> CLS[📊 6축 분류기\n임베딩 모델]
+    CLS --> CLU[🗂️ 클러스터링\nHDBSCAN]
+    CLU --> APR[✅ 인간 검토\n승인 / 거절]
+    APR -->|개선된 프롬프트| NEXT[🔄 다음 라운드]
+
+    style YT fill:#ef4444,color:#fff
     style COL fill:#ef4444,color:#fff
     style FIL fill:#a855f7,color:#fff
     style CLS fill:#a855f7,color:#fff
     style CLU fill:#a855f7,color:#fff
     style APR fill:#3b82f6,color:#fff
-    style F fill:#3b82f6,color:#fff
+    style NEXT fill:#a855f7,color:#fff
 ```
 
 ---
@@ -220,19 +230,19 @@ P = 0.35 × 빈도점수
 ### 4-5. 클러스터 승인 워크플로
 
 ```mermaid
-flowchart LR
+flowchart TD
     CLU[클러스터 생성\nstatus: pending] --> REVIEW[검토 화면\n/session/id/review]
 
-    REVIEW --> APP[approved\n✅ 프롬프트에 반영]
-    REVIEW --> REJ[rejected\n❌ 이번 라운드 제외]
-    REVIEW --> DEF[deferred\n⏸ 다음 라운드 재검토]
+    REVIEW --> APP[approved ✅\n프롬프트에 반영]
+    REVIEW --> REJ[rejected ❌\n이번 라운드 제외]
+    REVIEW --> DEF[deferred ⏸\n다음 라운드 재검토]
 
     APP --> AUDIO{카테고리?}
-    AUDIO -->|audio\nbgm 피드백| BGM[bgm_db ±6dB\nbgm_prompt_override\nGlobalTechnicalSetting 저장]
-    AUDIO -->|audio\nvoice 피드백| VOICE[voice_selector.py\n최적 보이스 자동 선택\nGlobalTechnicalSetting 저장]
+    AUDIO -->|audio bgm| BGM[bgm_db ±6dB\nbgm_prompt_override\nGlobalTechnicalSetting]
+    AUDIO -->|audio voice| VOICE[voice_selector.py\n최적 보이스 자동 선택\nGlobalTechnicalSetting]
     AUDIO -->|visual 등| VISUAL[Gemini LLM\n프롬프트 텍스트 수정\nPromptVersion 저장]
 
-    APP --> INJ[프롬프트 인젝션 검사\n25+ 패턴 정규식\nneedsReview=True 마킹]
+    APP --> INJ[인젝션 검사\n25+ 패턴 정규식\nneedsReview=True]
     APP --> LEARN[온라인 학습\n지수이동평균 weight=0.1]
 
     style APP fill:#10b981,color:#fff
@@ -262,7 +272,7 @@ flowchart LR
 ## 6. 영상 생성 — Kling V3
 
 ```mermaid
-flowchart LR
+flowchart TD
     P[프롬프트] --> STRIP[_strip_audio_for_kling\nAUDIO 섹션 제거]
     STRIP --> SUBMIT[fal_client.submit\nrequest_id 즉시 확보]
     SUBMIT --> POLL{폴링\n30초 간격\n최대 10분}
