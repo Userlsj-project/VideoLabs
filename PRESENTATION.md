@@ -9,9 +9,7 @@
 
 > 아래 링크를 클릭하면 **14단계 애니메이션 블럭도**가 새 탭에서 열립니다.
 
-**[▶ FrameLoop 파이프라인 블럭도 보기](https://htmlpreview.github.io/?https://github.com/Userlsj-project/VideoLabs/blob/main/FrameLoop_%EB%B8%94%EB%9F%AD%EB%8F%84.html)**
-
-> 링크가 안 열리면: [직접 열기 (GitHub Raw)](https://raw.githubusercontent.com/Userlsj-project/VideoLabs/main/FrameLoop_%EB%B8%94%EB%9F%AD%EB%8F%84.html)
+**[▶ FrameLoop 파이프라인 블럭도 보기](https://htmlpreview.github.io/?https://github.com/Userlsj-project/VideoLabs/blob/main/diagram.html)**
 
 ---
 
